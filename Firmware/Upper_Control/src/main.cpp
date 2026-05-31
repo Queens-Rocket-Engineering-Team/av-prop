@@ -5,7 +5,7 @@
 #include <esp_task_wdt.h>
 #include <logger.h>
 
-static constexpr uint32_t kWatchdogTimeoutMs = 20000U;
+static constexpr uint32_t kWatchdogTimeoutMs = 2000U;
 static constexpr uint8_t kMaxRxFramesPerLoop = 8U;
 
 struct NodeSchedulerState {
@@ -13,24 +13,22 @@ struct NodeSchedulerState {
   uint32_t lastHeartbeatTxMs = 0U;
 };
 
-static AimCanDriver g_canHw(NODE_ORIGIN, NODE_CAN_BAUD, NODE_CAN_RX_PIN, NODE_CAN_TX_PIN);
+static AimCanDriver g_canHw(NODE_ORIGIN, NODE_CAN_BAUD, CAN_RX_PIN, CAN_TX_PIN);
 static AimNetwork g_aim(&g_canHw, NODE_ORIGIN);
 
 static NodeSchedulerState g_schedulerState = {};
 static bool g_watchdogReady = false;
 static Logger g_log(Serial, NODE_ORIGIN, LogLevel::INFO);
 
+void transitionTo(NodeState nextState) {
+  AIM_ASSERT(nextState <= FAULT);
+  AIM_ASSERT(nextState != g_schedulerState.value);
+  LOG_INFO("State transition from %d to %d", static_cast<int>(g_schedulerState.value), static_cast<int>(nextState));
+  g_schedulerState.value = nextState;
+}
+
 void initWatchdog(void) {
-#if ESP_IDF_VERSION_MAJOR >= 5
-  const esp_task_wdt_config_t config = {
-    .timeout_ms = kWatchdogTimeoutMs,
-    .idle_core_mask = 0,
-    .trigger_panic = true
-  };
-  const esp_err_t initStatus = esp_task_wdt_init(&config);
-#else
   const esp_err_t initStatus = esp_task_wdt_init(kWatchdogTimeoutMs / 1000U, true);
-#endif
 
   const bool initOk = (initStatus == ESP_OK) || (initStatus == ESP_ERR_INVALID_STATE);
   const esp_err_t addStatus = esp_task_wdt_add(NULL);
@@ -38,7 +36,7 @@ void initWatchdog(void) {
   g_watchdogReady = initOk && addOk;
   if (!g_watchdogReady) {
     LOG_ERROR("Watchdog init failed (init=%d add=%d)", static_cast<int>(initStatus), static_cast<int>(addStatus));
-    g_schedulerState.value = FAULT;
+    transitionTo(FAULT);
     return;
   }
 
@@ -53,7 +51,7 @@ void kickWatchdog(void) {
   const esp_err_t status = esp_task_wdt_reset();
   if ((status != ESP_OK) && (status != ESP_ERR_INVALID_STATE)) {
     LOG_ERROR("Watchdog reset failed (%d)", static_cast<int>(status));
-    g_schedulerState.value = FAULT;
+    transitionTo(FAULT);
   }
 }
 
@@ -79,7 +77,7 @@ void serviceTx(uint32_t schedulerNowMs, uint32_t networkNowMs) {
   if ((schedulerNowMs - g_schedulerState.lastHeartbeatTxMs) >= AIM_HEARTBEAT_TX_INTERVAL_DEFAULT_MS) {
     g_schedulerState.lastHeartbeatTxMs = schedulerNowMs;
     const uint32_t payload = static_cast<uint32_t>(g_schedulerState.value);
-    if (!g_aim.sendTimedPktEx(NODE_ENDPOINT_SYSTEM, networkNowMs, payload, NODE_PRIMARY_DEST, AIM_TYP_HEARTBEAT)) {
+    if (!g_aim.sendTimedPktEx(NODE_ENDPOINT_SYSTEM, networkNowMs, payload, AIM_DEST_COMMS, AIM_TYP_HEARTBEAT)) {
       LOG_ERROR("Heartbeat TX failed");
     } else {
       LOG_DEBUG("Heartbeat TX ok");
@@ -88,14 +86,14 @@ void serviceTx(uint32_t schedulerNowMs, uint32_t networkNowMs) {
 }
 
 void runStateMachine(uint32_t schedulerNowMs, uint32_t networkNowMs) {
-  AIM_ASSERT(g_schedulerState.value <= FAULT);  // precondition: corrupted state → reset
+  AIM_ASSERT(g_schedulerState.value <= FAULT);
 
   switch (g_schedulerState.value) {
     case OPERATIONAL: {
 #ifndef FLIGHT_BUILD
       const ConsoleAction act = consoleCheckEntry();
       if (act == CONSOLE_ACTION_ENTER) {
-        g_schedulerState.value = DEBUG_CONSOLE;
+        transitionTo(DEBUG_CONSOLE);
       }
 #endif
       break;
@@ -106,7 +104,7 @@ void runStateMachine(uint32_t schedulerNowMs, uint32_t networkNowMs) {
       const ConsoleAction act = consoleService(
           static_cast<uint8_t>(g_schedulerState.value), networkNowMs);
       if (act == CONSOLE_ACTION_EXIT) {
-        g_schedulerState.value = OPERATIONAL;
+        transitionTo(OPERATIONAL);
       } else if (act == CONSOLE_ACTION_FLASH_INFO) {
         // g_flashTable.commandInfo(&Serial);
       } else if (act == CONSOLE_ACTION_FLASH_DUMP) {
@@ -192,20 +190,16 @@ void setup(void) {
   g_aim.begin();
   if (!nodeInitHardware()) {
     LOG_ERROR("Hardware init failed");
-    g_schedulerState.value = FAULT;
+    transitionTo(FAULT);
     return;
   }
-  LOG_INFO("Config JSON bytes=%u", static_cast<unsigned int>(nodeConfigJsonLen()));
-
 #ifndef FLIGHT_BUILD
   consoleInit(Serial, g_aim, g_log);
-#endif
-
-#ifndef FLIGHT_BUILD
   Serial.println("Console ready. d=enter debug");
 #endif
   g_schedulerState.lastHeartbeatTxMs = millis();
-  g_schedulerState.value = OPERATIONAL;
+  nodeStartTasks(g_aim);
+  transitionTo(OPERATIONAL);
 }
 
 void loop(void) {

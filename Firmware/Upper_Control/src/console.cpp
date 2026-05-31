@@ -11,7 +11,10 @@ enum ConsoleMenu : uint8_t {
   CONSOLE_MENU_ROOT      = 0U,
   CONSOLE_MENU_LOG_MASK  = 1U,
   CONSOLE_MENU_FLASH     = 2U,
-  CONSOLE_MENU_FLASH_ERASE_CONFIRM = 3U
+  CONSOLE_MENU_FLASH_ERASE_CONFIRM = 3U,
+  CONSOLE_MENU_NETWORK   = 4U,
+  CONSOLE_MENU_CAN_NODE  = 5U,
+  CONSOLE_MENU_IO_CONTROL = 6U
   // add more menus as needed
 };
 
@@ -51,7 +54,7 @@ static void showMenu(ConsoleMenu menu) { // All menu prints located here, add mo
   switch (menu) { 
     case CONSOLE_MENU_ROOT:
       s_serial->println("DEBUG: q exit | b back");
-      s_serial->println("1 status | 2 log | 3 flash");
+      s_serial->println("1 status | 2 log | 3 flash | 4 network | 5 CAN | 6 control");
       break;
     case CONSOLE_MENU_LOG_MASK:
       s_serial->println("LOG mask: q exit | b back");
@@ -66,13 +69,27 @@ static void showMenu(ConsoleMenu menu) { // All menu prints located here, add mo
       s_serial->println("FLASH ERASE: q exit | b back");
       s_serial->println("1 confirm");
       break;
-
-    // add additional menu prints here
+    case CONSOLE_MENU_NETWORK:
+      nodePrintNetworkStatus(*s_serial);
+      s_serial->println("NETWORK: q exit | b back | 1 refresh");
+      break;
+    case CONSOLE_MENU_CAN_NODE:
+      nodePrintCanStatus(*s_serial);
+      s_serial->println("CAN STATS: q exit | b back | 1 refresh");
+      break;
+    case CONSOLE_MENU_IO_CONTROL:
+      nodePrintSensorStatus(*s_serial);
+      s_serial->println("VALVE CONTROL: q exit | b back");
+      s_serial->print("1 toggle UPPER_VALVE1 ["); s_serial->print(nodeGetValveState(0) ? "OPEN" : "CLOSED"); s_serial->println("]");
+      s_serial->print("2 toggle UPPER_VALVE2 ["); s_serial->print(nodeGetValveState(1) ? "OPEN" : "CLOSED"); s_serial->println("]");
+      s_serial->print("3 toggle LOWER_VALVE1 ["); s_serial->print(nodeGetValveState(2) ? "OPEN" : "CLOSED"); s_serial->println("]");
+      s_serial->print("4 toggle LOWER_VALVE2 ["); s_serial->print(nodeGetValveState(3) ? "OPEN" : "CLOSED"); s_serial->println("]");
+      break;
 
     default:
       s_menu = CONSOLE_MENU_ROOT;
       s_serial->println("DEBUG: q exit | b back");
-      s_serial->println("1 status | 2 log | 3 flash");
+      s_serial->println("1 status | 2 log | 3 flash | 4 network | 5 CAN | 6 control");
       break;
   }
 }
@@ -167,6 +184,15 @@ ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
         case '3':
           showMenu(CONSOLE_MENU_FLASH);
           break;
+        case '4':
+          showMenu(CONSOLE_MENU_NETWORK);
+          return CONSOLE_ACTION_SHOW_NET;
+        case '5':
+          showMenu(CONSOLE_MENU_CAN_NODE);
+          return CONSOLE_ACTION_SHOW_CAN;
+        case '6':
+          showMenu(CONSOLE_MENU_IO_CONTROL);
+          return CONSOLE_ACTION_SHOW_IO;
         default:
           showMenu(CONSOLE_MENU_ROOT);
           break;
@@ -242,10 +268,60 @@ ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
       }
       break;
 
-      /***************************************************
-      ADD ADDITIONAL MENU CASES HERE
-      SUBMENUS CASES SHOULD DIRECTLY AFTER THE HIGHER MENU
-      ****************************************************/
+    case CONSOLE_MENU_NETWORK:
+      switch (c) {
+        case 'b':
+          showMenu(CONSOLE_MENU_ROOT);
+          break;
+        case '1':
+          showMenu(CONSOLE_MENU_NETWORK);
+          break;
+        default:
+          showMenu(CONSOLE_MENU_NETWORK);
+          break;
+      }
+      break;
+
+    case CONSOLE_MENU_CAN_NODE:
+      switch (c) {
+        case 'b':
+          showMenu(CONSOLE_MENU_ROOT);
+          break;
+        case '1':
+          showMenu(CONSOLE_MENU_CAN_NODE);
+          break;
+        default:
+          showMenu(CONSOLE_MENU_CAN_NODE);
+          break;
+      }
+      break;
+
+    case CONSOLE_MENU_IO_CONTROL:
+      switch (c) {
+        case 'b':
+          showMenu(CONSOLE_MENU_ROOT);
+          break;
+        case '1':
+          (void)nodeSetValveStateDirect(0, !nodeGetValveState(0));
+          showMenu(CONSOLE_MENU_IO_CONTROL);
+          break;
+        case '2':
+          (void)nodeSetValveStateDirect(1, !nodeGetValveState(1));
+          showMenu(CONSOLE_MENU_IO_CONTROL);
+          break;
+        case '3':
+          (void)nodeSetValveStateDirect(2, !nodeGetValveState(2));
+          showMenu(CONSOLE_MENU_IO_CONTROL);
+          break;
+        case '4':
+          (void)nodeSetValveStateDirect(3, !nodeGetValveState(3));
+          showMenu(CONSOLE_MENU_IO_CONTROL);
+          break;
+        default:
+          showMenu(CONSOLE_MENU_IO_CONTROL);
+          break;
+      }
+      break;
 
 
     default:
