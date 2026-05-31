@@ -116,23 +116,7 @@ bool s_sendFloatTelemetry(AimNetwork& aim, uint8_t endpointId, float value, uint
   uint32_t payload = 0U;
   static_assert(sizeof(payload) == sizeof(value), "float payload packing assumes 32-bit float");
   std::memcpy(&payload, &value, sizeof(payload));
-  return aim.sendPkt32Ex(endpointId, networkNowMs, payload, NODE_PRIMARY_DEST, AIM_TYP_SENSOR);
-}
-
-bool s_decodeValveEndpoint(const aimPkt& pkt, uint8_t& endpointOut) {
-  if (pkt.type == AIM_TYP_VALVE) {
-    endpointOut = pkt.getEndpointId();
-    return true;
-  }
-  if (pkt.type == AIM_TYP_VAL1) {
-    endpointOut = NODE_ENDPOINT_VALVE1;
-    return true;
-  }
-  if (pkt.type == AIM_TYP_VAL2) {
-    endpointOut = NODE_ENDPOINT_VALVE2;
-    return true;
-  }
-  return false;
+  return aim.sendTimedPktEx(endpointId, networkNowMs, payload, NODE_PRIMARY_DEST, AIM_TYP_SENSOR);
 }
 
 }  // namespace
@@ -208,10 +192,11 @@ bool nodeHandleCanPacket(const aimPkt& pkt, uint32_t networkNowMs, AimNetwork& a
     return false;
   }
 
-  uint8_t endpointId = 0U;
-  if (!s_decodeValveEndpoint(pkt, endpointId)) {
+  if (pkt.type != AIM_TYP_VALVE) {
     return false;
   }
+
+  const uint8_t endpointId = pkt.getEndpointId();
 
   const bool openCommand = (pkt.getPayload() != NODE_ACTUATOR_CLOSED);
 
@@ -222,18 +207,23 @@ bool nodeHandleCanPacket(const aimPkt& pkt, uint32_t networkNowMs, AimNetwork& a
     }
 
     const uint32_t statePayload = openCommand ? NODE_ACTUATOR_OPEN : NODE_ACTUATOR_CLOSED;
-    if (!aim.sendPkt32Ex(endpointId, networkNowMs, statePayload, pkt.origin, AIM_TYP_VALVE)) {
+    if (!aim.sendTimedPktEx(endpointId, networkNowMs, statePayload, pkt.origin, AIM_TYP_VALVE)) {
       LOG_ERROR("Valve state echo failed for endpoint=%u", static_cast<unsigned int>(endpointId));
     }
     return true;
   }
 
   if (s_isLowerEndpoint(endpointId)) {
-    if (!aim.sendPkt32Ex(endpointId, networkNowMs, pkt.getPayload(), AIM_DEST_LPROP, AIM_TYP_VALVE)) {
+    if (!aim.sendTimedPktEx(endpointId, networkNowMs, pkt.getPayload(), AIM_DEST_LPROP, AIM_TYP_VALVE)) {
       LOG_ERROR("Forward to Lower failed for endpoint=%u", static_cast<unsigned int>(endpointId));
     }
     return true;
   }
 
-  return false;
+  return true;
+}
+
+void nodeUpdate(uint32_t schedulerNowMs) {
+  // TODO: Upper control is not finished yet; add recurring node logic here.
+  (void)schedulerNowMs;
 }

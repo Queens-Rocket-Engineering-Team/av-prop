@@ -1,6 +1,12 @@
 # Propulsion Integration Systems
 > 2025-2026 Season - Propulsion Integration Projects
 
+> [!IMPORTANT]
+> Make sure to initialize and pull the repository's git submodules to acquire all schematic library and board design dependencies:
+> ```bash
+> git submodule update --init --recursive
+> ```
+
 <p align="center">
   <img src="Datasheets/images/Stack_W26.png" width="40%">
   <img src="Datasheets/images/Boards_W26.png" width="48%">
