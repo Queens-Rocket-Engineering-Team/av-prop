@@ -149,6 +149,8 @@ ConfigStatus configPrintBoard(Stream& out) {
   return status;
 }
 
+static bool s_rebootRequired = false;
+
 ConfigStatus storageFormatForMaintenance(void) {
   if (s_fs == nullptr || s_recorder == nullptr) {
     return ConfigStatus::STORAGE_DOWN;
@@ -161,5 +163,13 @@ ConfigStatus storageFormatForMaintenance(void) {
     LOG_WARN("Log close failed before format");
   }
 
-  return s_fs->format() ? ConfigStatus::OK : ConfigStatus::WRITE_FAILED;
+  if (!s_fs->format()) {
+    return ConfigStatus::WRITE_FAILED;
+  }
+  s_rebootRequired = true;
+  return ConfigStatus::OK;
+}
+
+bool configRebootRequired(void) {
+  return s_rebootRequired;
 }

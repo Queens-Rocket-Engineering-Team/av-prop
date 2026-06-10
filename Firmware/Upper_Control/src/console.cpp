@@ -47,8 +47,6 @@ static BoardConfig s_savedBoardConfig = {};
 static bool        s_configDiscardArmed = false;
 static uint32_t    s_lastCtrlAEntryMs = 0U;
 static uint8_t     s_bootCanId = 0U;            // canId active since boot
-static bool        s_storageResetPending = false;  // set after format; cleared by reboot only
-static uint8_t     s_dumpSavedLogMask = 0U;  // logger mask restored when the binary dump ends
 
 static char    s_inputBuf[kInputBufLen];
 static uint8_t s_inputLen = 0U;
@@ -177,7 +175,7 @@ static void showMenu(ConsoleMenu menu) {
       s_serial->println("DBG > LOG [q:exit b:back] 0:off 1:dbg 2:inf 3:wrn 4:err 5:all 6:iwe");
       break;
     case CONSOLE_MENU_FLASH:
-      if (s_storageResetPending) {
+      if (configRebootRequired()) {
         // Restricted mode: must keep the literal "FLS [" — extract_tool waits on it.
         s_serial->println("DBG > FLS [q:exit b:back] storage reset — reboot required");
       } else {
@@ -292,7 +290,6 @@ static ConsoleAction serviceDump(void) {
   if ((s_serial->available() > 0) && (s_serial->peek() == 'b')) {
     s_serial->read();
     s_recorder->stopDump();
-    s_log->setFilterMask(s_dumpSavedLogMask);
     s_serial->println("[--] dump canceled");
     s_menu = CONSOLE_MENU_FLASH;
     showMenu(s_menu);
@@ -300,7 +297,6 @@ static ConsoleAction serviceDump(void) {
   }
 
   if (!s_recorder->serviceDump(kDumpRowsPerTick)) {
-    s_log->setFilterMask(s_dumpSavedLogMask);
     s_serial->printf("[OK] dump complete — %uB\n", s_fs->getUsedSize());
     s_menu = CONSOLE_MENU_FLASH;
     showMenu(s_menu);
@@ -323,7 +319,6 @@ bool consoleInit(Stream& serial,
   s_recorder    = &recorder;
   s_boardConfig = &boardConfig;
   s_bootCanId   = boardConfig.canId;
-  s_storageResetPending = false;
   resetMenu();
   copyBoardConfig(s_savedBoardConfig, boardConfig);
   return consoleReady();
@@ -407,7 +402,7 @@ ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
     case CONSOLE_MENU_FLASH:
       // After a format, only back/exit work until reboot — every post-format
       // dump/config combination is invalid rather than individually handled.
-      if (s_storageResetPending && (c != 'b')) {
+      if (configRebootRequired() && (c != 'b')) {
         s_serial->println("[ERR] reboot required");
         break;
       }
@@ -416,11 +411,8 @@ ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
         case '1': s_serial->printf("ready=%d total=%u used=%u\n",
                                    s_fs->isReady(), s_fs->getTotalSize(), s_fs->getUsedSize()); break;
         case '2':
+          // startDump mutes the logger for the binary stream; stopDump restores it.
           if (s_recorder->startDump(s_serial)) {
-            // Dump is a binary serial mode: an async LOG_* line would corrupt
-            // the block stream (no checksums), so mute the logger until done.
-            s_dumpSavedLogMask = s_log->filterMask();
-            s_log->setFilterMask(0U);
             s_menu = CONSOLE_MENU_FLASH_DUMPING;
           } else {
             s_serial->println("[ERR] dump failed to start");
@@ -437,7 +429,6 @@ ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
         case 'b': popMenu(); break;
         case '1':
           if (storageFormatForMaintenance() == ConfigStatus::OK) {
-            s_storageResetPending = true;
             s_serial->println("[OK] flash erased — reboot required before dump/config operations");
           } else {
             s_serial->println("[ERR] erase failed");

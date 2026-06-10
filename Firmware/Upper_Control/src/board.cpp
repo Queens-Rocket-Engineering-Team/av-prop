@@ -183,6 +183,15 @@ static uint32_t     s_tsOffset = 0U;
 static uint16_t     s_streamFrequencyHz = 0U;  // 0 = stream off
 static uint32_t     s_lastStreamTxMs = 0U;
 
+// Counts reported to the QLCP server: PT1-4 sensors, SOL1-4 controls.
+constexpr uint8_t kQlcpControlCount = 4U;
+constexpr uint8_t kQlcpSensorCount  = 4U;
+
+static void s_fillHeader(qlcp_header& header) {
+  header.sequence = static_cast<uint8_t>(s_sequence++);
+  header.timestamp = s_tsOffset + millis();
+}
+
 static const char* s_netStateName(QlcpNetState st) {
   switch (st) {
     case QLCP_NET_IDLE:        return "IDLE";
@@ -248,7 +257,7 @@ bool s_sendFloatTelemetry(AimNetwork& aim, uint8_t endpointId, float value, uint
 
   aimPkt pkt = {};
   pkt.dest = AIM_DEST_COMMS;
-  pkt.dest = AIM_TYPE_SENSOR;
+  pkt.type = AIM_TYPE_SENSOR;
   uint32_t payload = 0U;
   static_assert(sizeof(payload) == sizeof(value), "float payload packing assumes 32-bit float");
   std::memcpy(&payload, &value, sizeof(payload));
@@ -260,8 +269,7 @@ bool s_sendFloatTelemetry(AimNetwork& aim, uint8_t endpointId, float value, uint
 static void s_sendAck(uint8_t ackType, uint16_t ackSeq) {
   qlcp_server_payload out = {};
   out.packet_type = QLCP_PT_ACK;
-  out.payload_data.ack.header.sequence = s_sequence++;
-  out.payload_data.ack.header.timestamp = s_tsOffset + millis();
+  s_fillHeader(out.payload_data.ack.header);
   out.payload_data.ack.ack_packet_type = ackType;
   out.payload_data.ack.ack_sequence = ackSeq;
   if (tcp_tx_payload(&s_netLink, &out) != 0) {
@@ -272,8 +280,7 @@ static void s_sendAck(uint8_t ackType, uint16_t ackSeq) {
 static void s_sendNack(uint8_t nackType, uint16_t nackSeq, uint8_t errCode) {
   qlcp_server_payload out = {};
   out.packet_type = QLCP_PT_NACK;
-  out.payload_data.nack.header.sequence = s_sequence++;
-  out.payload_data.nack.header.timestamp = s_tsOffset + millis();
+  s_fillHeader(out.payload_data.nack.header);
   out.payload_data.nack.nack_packet_type = nackType;
   out.payload_data.nack.nack_sequence = nackSeq;
   out.payload_data.nack.nack_error_code = errCode;
@@ -476,18 +483,17 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
 
     case QLCP_PT_STATUS_REQUEST: {
       // Encoded immediately by tcp_tx_payload, so the stack array is safe.
-      qlcp_control_data controlData[4] = {};
-      for (uint8_t i = 0U; i < 4U; i++) {
+      qlcp_control_data controlData[kQlcpControlCount] = {};
+      for (uint8_t i = 0U; i < kQlcpControlCount; i++) {
         controlData[i].control_id = i;
         controlData[i].control_state = g_valveStates[i] ? QLCP_CS_OPEN : QLCP_CS_CLOSED;
       }
 
       qlcp_server_payload out = {};
       out.packet_type = QLCP_PT_STATUS;
-      out.payload_data.status.header.sequence = s_sequence++;
-      out.payload_data.status.header.timestamp = s_tsOffset + millis();
+      s_fillHeader(out.payload_data.status.header);
       out.payload_data.status.control_data = controlData;
-      out.payload_data.status.control_count = 4U;
+      out.payload_data.status.control_count = kQlcpControlCount;
       out.payload_data.status.device_status = QLCP_DS_ACTIVE;
 
       if (tcp_tx_payload(&s_netLink, &out) != 0) {
@@ -575,8 +581,7 @@ static void qlcpNetService(uint32_t nowMs) {
       if (!s_configSent) {
         qlcp_server_payload out = {};
         out.packet_type = QLCP_PT_CONFIG;
-        out.payload_data.config.header.sequence = s_sequence++;
-        out.payload_data.config.header.timestamp = s_tsOffset + millis();
+        s_fillHeader(out.payload_data.config.header);
         out.payload_data.config.config_data = kBoardQlcpConfigJson;
         out.payload_data.config.config_data_len = sizeof(kBoardQlcpConfigJson) - 1U;
         if (tcp_tx_payload(&s_netLink, &out) == 0) {
@@ -637,18 +642,17 @@ static void qlcpTelemetryService(uint32_t nowMs) {
   }
   s_lastStreamTxMs = nowMs;
 
-  qlcp_sensor_data readings[4] = {};
-  for (uint8_t i = 0U; i < 4U; i++) {
+  qlcp_sensor_data readings[kQlcpSensorCount] = {};
+  for (uint8_t i = 0U; i < kQlcpSensorCount; i++) {
     readings[i].sensor_id = i;
     readings[i].unit = QLCP_UNIT_PSI;
     readings[i].value = g_ptValues[i];
   }
 
   qlcp_data_packet pkt = {};
-  pkt.header.sequence = s_sequence++;
-  pkt.header.timestamp = s_tsOffset + millis();
+  s_fillHeader(pkt.header);
   pkt.sensor_data = readings;
-  pkt.sensor_count = 4U;
+  pkt.sensor_count = kQlcpSensorCount;
 
   (void)udp_send_data(&s_netLink, &pkt);  // lossy by design
 }

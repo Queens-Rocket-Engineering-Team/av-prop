@@ -58,7 +58,12 @@ ConfigStatus configEnsureTelemetrySchema(void);
 ConfigStatus configPrintBoard(Stream& out);
 
 // Quiesces the flight recorder (stop dump, close log), then formats storage.
-// After OK the caller must treat storage as reset-pending-reboot.
+// On OK, configRebootRequired() latches true until reboot.
 ConfigStatus storageFormatForMaintenance(void);
+
+// True once storageFormatForMaintenance() has succeeded; cleared only by
+// reboot. While set, storage-dependent operations (dump, config writes)
+// must be refused.
+bool configRebootRequired(void);
 
 #endif  // BOARD_CONFIG_H
