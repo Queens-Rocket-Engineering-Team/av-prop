@@ -1,4 +1,5 @@
 #include "board.h"
+#include "board_config.h"
 #include "console.h"
 
 #include <cstring>
@@ -165,36 +166,25 @@ void setup(void) {
 
   if (g_fs.begin()) {
     LOG_INFO("Storage ready.");
+    configInit(g_fs, g_configStore, g_flightRecorder);
 
-    JsonDocument doc;
-    if (g_configStore.load("/config.json", doc)) {
-      if (!doc["telemetry"].is<JsonObject>()) {
-        JsonObject telemetry = doc["telemetry"].to<JsonObject>();
-        telemetry["cols"] = BOARD_LOG_COL_COUNT;
+    const ConfigStatus schemaStatus = configEnsureTelemetrySchema();
+    if (schemaStatus != ConfigStatus::OK && schemaStatus != ConfigStatus::NOT_PRESENT) {
+      LOG_ERROR("Telemetry schema check failed (%d)", static_cast<int>(schemaStatus));
+    }
 
-        JsonArray headers = telemetry["headers"].to<JsonArray>();
-        for (uint8_t i = 0; i < BOARD_LOG_COL_COUNT; i++) {
-          headers.add(kBoardTelemetryHeaders[i]);
-        }
-
-        if (!g_configStore.save("/config.json", doc)) {
-          LOG_ERROR("Failed to write telemetry config");
-        } else {
-          LOG_INFO("Telemetry config added");
-        }
-      }
-
-      if (doc.containsKey("boardName")) {
-        strlcpy(g_boardConfig.boardName, doc["boardName"], sizeof(g_boardConfig.boardName));
-      }
-
-      if (doc.containsKey("canId")) {
-        g_boardConfig.canId = doc["canId"];
-      }
-
-      LOG_INFO("Loaded config overlay: %s (CAN ID: %u)",
-               g_boardConfig.boardName,
-               g_boardConfig.canId);
+    switch (configLoadBoard(g_boardConfig)) {
+      case ConfigStatus::OK:
+        LOG_INFO("Loaded config overlay: %s (CAN ID: %u)",
+                 g_boardConfig.boardName,
+                 g_boardConfig.canId);
+        break;
+      case ConfigStatus::NOT_PRESENT:
+        LOG_INFO("No stored config — using compiled defaults");
+        break;
+      default:
+        LOG_ERROR("Config load failed — using compiled defaults");
+        break;
     }
   } else {
     LOG_ERROR("Storage init FAILED, using macro defaults.");
