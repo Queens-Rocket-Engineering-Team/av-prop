@@ -48,6 +48,7 @@ static bool        s_configDiscardArmed = false;
 static uint32_t    s_lastCtrlAEntryMs = 0U;
 static uint8_t     s_bootCanId = 0U;            // canId active since boot
 static bool        s_storageResetPending = false;  // set after format; cleared by reboot only
+static uint8_t     s_dumpSavedLogMask = 0U;  // logger mask restored when the binary dump ends
 
 static char    s_inputBuf[kInputBufLen];
 static uint8_t s_inputLen = 0U;
@@ -291,6 +292,7 @@ static ConsoleAction serviceDump(void) {
   if ((s_serial->available() > 0) && (s_serial->peek() == 'b')) {
     s_serial->read();
     s_recorder->stopDump();
+    s_log->setFilterMask(s_dumpSavedLogMask);
     s_serial->println("[--] dump canceled");
     s_menu = CONSOLE_MENU_FLASH;
     showMenu(s_menu);
@@ -298,6 +300,7 @@ static ConsoleAction serviceDump(void) {
   }
 
   if (!s_recorder->serviceDump(kDumpRowsPerTick)) {
+    s_log->setFilterMask(s_dumpSavedLogMask);
     s_serial->printf("[OK] dump complete — %uB\n", s_fs->getUsedSize());
     s_menu = CONSOLE_MENU_FLASH;
     showMenu(s_menu);
@@ -414,6 +417,10 @@ ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
                                    s_fs->isReady(), s_fs->getTotalSize(), s_fs->getUsedSize()); break;
         case '2':
           if (s_recorder->startDump(s_serial)) {
+            // Dump is a binary serial mode: an async LOG_* line would corrupt
+            // the block stream (no checksums), so mute the logger until done.
+            s_dumpSavedLogMask = s_log->filterMask();
+            s_log->setFilterMask(0U);
             s_menu = CONSOLE_MENU_FLASH_DUMPING;
           } else {
             s_serial->println("[ERR] dump failed to start");
