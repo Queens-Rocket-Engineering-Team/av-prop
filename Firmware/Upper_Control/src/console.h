@@ -6,7 +6,6 @@
 #include <Arduino.h>
 #include <cstdint>
 
-class AimNetwork;
 class AimCanDriver;
 class Logger;
 class AimFileSystem;
@@ -21,7 +20,6 @@ enum ConsoleAction : uint8_t {
 };
 
 bool consoleInit(Stream& serial,
-                 AimNetwork& aim,
                  AimCanDriver& canDriver,
                  Logger& log,
                  AimFileSystem& fs,
@@ -30,7 +28,6 @@ bool consoleInit(Stream& serial,
 
 ConsoleAction consoleCheckEntry(void);
 ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs);
-void consoleResume(void);
 
 #endif // FLIGHT_BUILD
 

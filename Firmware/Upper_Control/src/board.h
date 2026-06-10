@@ -70,6 +70,11 @@ struct BoardConfig {
 
 extern BoardConfig g_boardConfig;
 
+// Live telemetry state owned by board.cpp: [0..1] local PTs/valves,
+// [2..3] mirrored from Lower Control over CAN.
+extern float g_ptValues[4];
+extern bool g_valveStates[4];
+
 #define BOARD_CAN_BAUD 500000U
 
 #define BOARD_SERIAL_BAUD 115200U

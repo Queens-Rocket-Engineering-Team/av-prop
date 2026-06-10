@@ -116,8 +116,6 @@ void runStateMachine(uint32_t schedulerNowMs, uint32_t networkNowMs) {
       // Periodic logging
       if (schedulerNowMs - g_schedulerState.lastLogMs >= kLogIntervalMs) {
         g_schedulerState.lastLogMs = schedulerNowMs;
-        extern float g_ptValues[];
-        extern bool g_valveStates[];
         uint32_t row[BOARD_LOG_COL_COUNT];
         row[0] = networkNowMs;
         std::memcpy(&row[1], &g_ptValues[0], 4);
@@ -197,7 +195,7 @@ void setup(void) {
     return;
   }
 #ifndef FLIGHT_BUILD
-  if (!consoleInit(Serial, g_aim, g_canHw, g_log, g_fs, g_flightRecorder, g_boardConfig)) {
+  if (!consoleInit(Serial, g_canHw, g_log, g_fs, g_flightRecorder, g_boardConfig)) {
     LOG_ERROR("Console init failed");
     transitionTo(FAULT);
     return;

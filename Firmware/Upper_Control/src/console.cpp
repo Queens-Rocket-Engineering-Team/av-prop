@@ -32,7 +32,6 @@ enum ConsoleMenu : uint8_t {
 };
 
 static Stream*            s_serial      = nullptr;
-static AimNetwork*        s_aim         = nullptr;
 static AimCanDriver*      s_canDriver   = nullptr;
 static Logger*            s_log         = nullptr;
 static AimFileSystem*     s_fs          = nullptr;
@@ -52,7 +51,7 @@ static char    s_inputBuf[kInputBufLen];
 static uint8_t s_inputLen = 0U;
 
 static bool consoleReady(void) {
-  return (s_serial != nullptr) && (s_aim != nullptr) && (s_canDriver != nullptr) &&
+  return (s_serial != nullptr) && (s_canDriver != nullptr) &&
          (s_log != nullptr) && (s_fs != nullptr) && (s_recorder != nullptr) &&
          (s_boardConfig != nullptr);
 }
@@ -305,14 +304,12 @@ static ConsoleAction serviceDump(void) {
 }
 
 bool consoleInit(Stream& serial,
-                 AimNetwork& aim,
                  AimCanDriver& canDriver,
                  Logger& log,
                  AimFileSystem& fs,
                  AimFlightRecorder& recorder,
                  BoardConfig& boardConfig) {
   s_serial      = &serial;
-  s_aim         = &aim;
   s_canDriver   = &canDriver;
   s_log         = &log;
   s_fs          = &fs;
@@ -322,10 +319,6 @@ bool consoleInit(Stream& serial,
   resetMenu();
   copyBoardConfig(s_savedBoardConfig, boardConfig);
   return consoleReady();
-}
-
-void consoleResume(void) {
-  if (consoleReady()) { showMenu(s_menu); }
 }
 
 ConsoleAction consoleCheckEntry(void) {
