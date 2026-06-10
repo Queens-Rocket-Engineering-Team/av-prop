@@ -45,3 +45,8 @@ fp-info-cache
 *.vscode
 
 *.pio
+CLAUDE.md
+
+# Build/tooling artifacts
+dist/
+.venv/

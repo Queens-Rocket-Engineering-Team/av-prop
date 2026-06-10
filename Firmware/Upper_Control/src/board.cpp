@@ -1,4 +1,4 @@
-#include "node.h"
+#include "board.h"
 
 #include <ADS131M04.h>
 #include <SPI.h>
@@ -13,7 +13,13 @@ extern "C" {
 #include <qlcp_lib.h>
 }
 
-namespace {
+bool g_boardHardwareReady = false;
+uint32_t g_lastTelemetryMs = 0U;
+bool g_valveStates[4] = {false, false, false, false};
+float g_ptValues[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+ADS131M04 g_adc(-1, ADC_DRDY_PIN, &SPI);
+static AimNetwork* s_aimPtr = nullptr;
 
 constexpr uint8_t kAdcClockChannel = 0U;
 constexpr uint32_t kAdcClockHz = 8192000U;
@@ -24,31 +30,55 @@ constexpr size_t kAdcChannelCount = 4U;
 constexpr float kPtShuntResistanceOhms = 62.0f;
 constexpr float kPtMaxPsi = 100.0f;
 
-struct NodeSensorMapping {
+struct BoardSensorMapping {
   uint8_t endpointId;
   uint8_t adcChannel;
 };
 
-struct NodeControlMapping {
+struct BoardControlMapping {
   uint8_t endpointId;
   uint8_t pin;
   bool defaultOpen;
 };
 
-constexpr NodeSensorMapping kLocalPtSensors[] = {
-    {NODE_ENDPOINT_PT1, 0U},
-    {NODE_ENDPOINT_PT2, 1U},
+constexpr BoardSensorMapping kLocalPtSensors[] = {
+    {BOARD_ENDPOINT_PT1, 0U},
+    {BOARD_ENDPOINT_PT2, 1U},
 };
 
-constexpr NodeControlMapping kLocalValveControls[] = {
-    {NODE_ENDPOINT_VALVE1, SOL1_EN_PIN, false},
-    {NODE_ENDPOINT_VALVE2, SOL2_EN_PIN, false},
+constexpr BoardControlMapping kLocalValveControls[] = {
+    {BOARD_ENDPOINT_VALVE1, SOL1_EN_PIN, false},
+    {BOARD_ENDPOINT_VALVE2, SOL2_EN_PIN, false},
 };
 
-constexpr char kNodeConfigJson[] = R"json({
+constexpr char kBoardQlcpConfigJson[] = R"json({
   "device_name": "PEGASUS-UPPER",
   "device_type": "Sensor Monitor",
   "sensor_info": {
+    "voltage_sense": {
+      "LOWER_VSOL_SENSE": {
+        "sensor_index": "LOWER_SOL_VOLTAGE_SENSE",
+        "unit": "V"
+      },
+      "UPPER_24V_SENSE": {
+        "sensor_index": "UPPER_24_VOLTAGE_SENSE",
+        "unit": "V"
+      }
+    },
+    "hall_effect": {
+      "UPPER_HALL1": {
+        "sensor_index": "HALL1",
+        "unit": "A"       
+      },
+      "LOWER_HALL1": {
+        "sensor_index": "HALL2",
+        "unit": "A"
+      },
+      "LOWER_HALL2": {
+        "sensor_index": "HALL3",
+        "unit": "A"
+      }
+    },
     "thermocouple": {
       "LOWER_TC1": {
         "sensor_index": "TC1",
@@ -84,6 +114,21 @@ constexpr char kNodeConfigJson[] = R"json({
     }
   },
   "controls": {
+    "UPPER_V_PT": {
+      "control_index": "UPPER_V_PT_CTL",
+      "default_state": "OPEN",
+      "type": "relay"
+    },
+    "LOWER_V_PT": {
+      "control_index": "LOWER_V_PT_CTL",
+      "default_state": "OPEN",
+      "type": "relay"
+    },
+    "LOWER_V_SOL": {
+      "control_index": "LOWER_V_SOL_CTL",
+      "default_state": "OPEN",
+      "type": "relay"
+    },
     "UPPER_VALVE1": {
       "control_index": "SOL1",
       "default_state": "CLOSED",
@@ -107,39 +152,6 @@ constexpr char kNodeConfigJson[] = R"json({
   }
 })json";
 
-ADS131M04 g_adc(-1, ADC_DRDY_PIN, &SPI);
-
-bool g_nodeHardwareReady = false;
-uint32_t g_lastTelemetryMs = 0U;
-bool g_valveStates[4] = {false, false, false, false};
-float g_ptValues[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-static AimNetwork* s_aimPtr = nullptr;
-
-#ifndef FLIGHT_BUILD
-struct QlcpStats {
-  uint32_t tcpRxCount = 0;
-  uint32_t tcpTxCount = 0;
-  uint32_t udpTxCount = 0;
-  uint32_t configSent = 0;
-  uint32_t timesyncCount = 0;
-  uint32_t heartbeatRx = 0;
-  uint32_t controlRx = 0;
-  uint32_t statusRequestRx = 0;
-  uint32_t streamStartRx = 0;
-  uint32_t streamStopRx = 0;
-};
-static QlcpStats g_qlcpStats = {};
-
-struct CanStats {
-  uint32_t rxCount = 0;
-  uint32_t txCount = 0;
-  uint32_t sensorRx = 0;
-  uint32_t valveRx = 0;
-  uint32_t valveTx = 0;
-};
-static CanStats g_canStats = {};
-#endif
-
 static network_ctx_t g_netCtx = {};
 static std::atomic<uint16_t> g_sequence{0};
 static std::atomic<uint32_t> g_tsOffset{0};
@@ -150,8 +162,8 @@ static EventGroupHandle_t g_qlcpEventGroup = nullptr;
 #define QLCP_SINGLE_READ_BIT (1 << 1)
 
 int s_localValveIndexFromEndpoint(uint8_t endpointId) {
-  if (endpointId == NODE_ENDPOINT_VALVE1) return 0;
-  if (endpointId == NODE_ENDPOINT_VALVE2) return 1;
+  if (endpointId == BOARD_ENDPOINT_VALVE1) return 0;
+  if (endpointId == BOARD_ENDPOINT_VALVE2) return 1;
   return -1;
 }
 
@@ -182,19 +194,16 @@ bool s_setLocalValveState(uint8_t endpointId, bool open) {
 bool s_sendFloatTelemetry(AimNetwork& aim, uint8_t endpointId, float value, uint32_t networkNowMs) {
   AIM_ASSERT(endpointId > 0 && endpointId <= AIM_PKT_TIMED_ENDPOINT_MAX);
 
+  aimPkt pkt = {};
+  pkt.dest = AIM_DEST_COMMS;
+  pkt.dest = AIM_TYPE_SENSOR;
   uint32_t payload = 0U;
   static_assert(sizeof(payload) == sizeof(value), "float payload packing assumes 32-bit float");
   std::memcpy(&payload, &value, sizeof(payload));
-  const bool ok = aim.sendTimedPktEx(endpointId, networkNowMs, payload, AIM_DEST_COMMS, AIM_TYP_SENSOR);
-#ifndef FLIGHT_BUILD
-  if (ok) {
-    g_canStats.txCount++;
-  }
-#endif
+  
+  const bool ok = pkt.packData(endpointId, networkNowMs, payload) && aim.sendPkt(pkt);
   return ok;
 }
-
-}  // namespace
 
 static void s_sendAck(uint8_t ackType, uint16_t ackSeq) {
   qlcp_server_payload out = {};
@@ -204,9 +213,6 @@ static void s_sendAck(uint8_t ackType, uint16_t ackSeq) {
   out.payload_data.ack.ack_packet_type = ackType;
   out.payload_data.ack.ack_sequence = ackSeq;
   (void)xQueueSend(g_netCtx.tcp_send_queue_handle, &out, MESSAGE_QUEUE_TIMEOUT);
-#ifndef FLIGHT_BUILD
-  g_qlcpStats.tcpTxCount++;
-#endif
 }
 
 static void s_sendNack(uint8_t nackType, uint16_t nackSeq, uint8_t errCode) {
@@ -218,13 +224,10 @@ static void s_sendNack(uint8_t nackType, uint16_t nackSeq, uint8_t errCode) {
   out.payload_data.nack.nack_sequence = nackSeq;
   out.payload_data.nack.nack_error_code = errCode;
   (void)xQueueSend(g_netCtx.tcp_send_queue_handle, &out, MESSAGE_QUEUE_TIMEOUT);
-#ifndef FLIGHT_BUILD
-  g_qlcpStats.tcpTxCount++;
-#endif
 }
 
-bool nodeInitHardware(void) {
-  AIM_ASSERT(!g_nodeHardwareReady);
+bool boardInitHardware(void) {
+  AIM_ASSERT(!g_boardHardwareReady);
 
   const int indicatorLeds[] = {WIFI_LED_PIN, CAN_LED_PIN, DEBUG_LED_PIN};
   for (size_t i = 0; i < (sizeof(indicatorLeds) / sizeof(indicatorLeds[0])); i++) {
@@ -252,16 +255,16 @@ bool nodeInitHardware(void) {
 #endif
 
   digitalWrite(VPT_EN_PIN, HIGH);
-  g_nodeHardwareReady = true;
+  g_boardHardwareReady = true;
   g_lastTelemetryMs = millis();
-  LOG_INFO("Node hardware initialized");
+  LOG_INFO("Board hardware initialized");
 
-  AIM_ASSERT(g_nodeHardwareReady);
+  AIM_ASSERT(g_boardHardwareReady);
   return true;
 }
 
-void nodeServiceLocalTelemetry(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& aim) {
-  AIM_ASSERT(g_nodeHardwareReady);
+void boardServiceLocalTelemetry(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& aim) {
+  AIM_ASSERT(g_boardHardwareReady);
 
   if ((schedulerNowMs - g_lastTelemetryMs) < kTelemetryPeriodMs) {
     return;
@@ -278,24 +281,17 @@ void nodeServiceLocalTelemetry(uint32_t schedulerNowMs, uint32_t networkNowMs, A
   AIM_ASSERT(g_lastTelemetryMs == schedulerNowMs);
 }
 
-bool nodeHandleCanPacket(const aimPkt& pkt, uint32_t networkNowMs, AimNetwork& aim) {
-#ifndef FLIGHT_BUILD
-  g_canStats.rxCount++;
-#endif
-
-  if (pkt.dest != NODE_ORIGIN && pkt.dest != AIM_DEST_BROADCAST) {
+bool boardHandleCanPacket(const aimPkt& pkt, uint32_t networkNowMs, AimNetwork& aim) {
+  if (pkt.dest != BOARD_ORIGIN && pkt.dest != AIM_DEST_BROADCAST) {
     return false;
   }
 
-  if (pkt.type == AIM_TYP_VALVE) {
-#ifndef FLIGHT_BUILD
-    g_canStats.valveRx++;
-#endif
+  if (pkt.type == AIM_TYPE_VALVE) {
     const uint8_t endpointId = pkt.getEndpointId();
-    if (endpointId >= NODE_ENDPOINT_LOWER_BASE) {
-      const bool openCommand = (pkt.getPayload() != NODE_ACTUATOR_CLOSED);
+    if (endpointId >= BOARD_ENDPOINT_LOWER_BASE) {
+      const bool openCommand = (pkt.getPayload() != BOARD_ACTUATOR_CLOSED);
       // Lower valve state echo received back from Lower Control!
-      int valveIdx = endpointId - (NODE_ENDPOINT_LOWER_BASE + 2U);
+      int valveIdx = endpointId - (BOARD_ENDPOINT_LOWER_BASE + 2U);
       if (valveIdx >= 0 && valveIdx < 2) {
         g_valveStates[2 + valveIdx] = openCommand;
         LOG_INFO("Lower valve %d state echo: %d", valveIdx, openCommand);
@@ -304,17 +300,14 @@ bool nodeHandleCanPacket(const aimPkt& pkt, uint32_t networkNowMs, AimNetwork& a
     }
   }
 
-  if (pkt.type == AIM_TYP_SENSOR) {
-#ifndef FLIGHT_BUILD
-    g_canStats.sensorRx++;
-#endif
+  if (pkt.type == AIM_TYPE_SENSOR) {
     const uint8_t endpointId = pkt.getEndpointId();
-    if (endpointId >= NODE_ENDPOINT_LOWER_BASE) {
+    if (endpointId >= BOARD_ENDPOINT_LOWER_BASE) {
       float val = 0.0f;
       const uint32_t payload = pkt.getPayload();
       std::memcpy(&val, &payload, sizeof(val));
 
-      int ptIdx = endpointId - NODE_ENDPOINT_LOWER_BASE;
+      int ptIdx = endpointId - BOARD_ENDPOINT_LOWER_BASE;
       if (ptIdx >= 0 && ptIdx < 2) {
         g_ptValues[2 + ptIdx] = val;
         LOG_DEBUG("Lower PT %d telemetry received: %.2f PSI", ptIdx, val);
@@ -326,8 +319,8 @@ bool nodeHandleCanPacket(const aimPkt& pkt, uint32_t networkNowMs, AimNetwork& a
   return false;
 }
 
-void nodeUpdate(uint32_t schedulerNowMs) {
-  AIM_ASSERT(g_nodeHardwareReady);
+void boardUpdate(uint32_t schedulerNowMs) {
+  AIM_ASSERT(g_boardHardwareReady);
 
   static uint32_t lastAdcReadMs = 0U;
   if ((schedulerNowMs - lastAdcReadMs) < kTelemetryPeriodMs) {
@@ -390,40 +383,27 @@ static void qlcpManagerTask(void *pvParams) {
       qlcp_config_packet config = {};
       config.header.sequence = g_sequence++;
       config.header.timestamp = g_tsOffset + millis();
-      config.config_data = kNodeConfigJson;
-      config.config_data_len = sizeof(kNodeConfigJson) - 1;
+      config.config_data = kBoardQlcpConfigJson;
+      config.config_data_len = sizeof(kBoardQlcpConfigJson) - 1;
       payloadOut.payload_data.config = config;
 
       if (xQueueSend(g_netCtx.tcp_send_queue_handle, &payloadOut, 0) == pdTRUE) {
         g_netCtx.config_sent = true;
-#ifndef FLIGHT_BUILD
-        g_qlcpStats.configSent++;
-        g_qlcpStats.tcpTxCount++;
-#endif
         LOG_INFO("Sent CONFIG packet to server");
       }
     }
 
     if (xQueueReceive(g_netCtx.tcp_recv_queue_handle, &payloadIn, pdMS_TO_TICKS(50)) == pdTRUE) {
-#ifndef FLIGHT_BUILD
-      g_qlcpStats.tcpRxCount++;
-#endif
       switch (payloadIn.packet_type) {
         case QLCP_PT_TIMESYNC: {
           uint32_t serverTime = payloadIn.payload_data.header_only.timestamp;
           g_tsOffset = serverTime - millis();
           LOG_INFO("QLCP timesync completed. Offset: %u ms", g_tsOffset.load());
-#ifndef FLIGHT_BUILD
-          g_qlcpStats.timesyncCount++;
-#endif
           s_sendAck(QLCP_PT_TIMESYNC, payloadIn.payload_data.header_only.sequence);
           break;
         }
 
         case QLCP_PT_HEARTBEAT: {
-#ifndef FLIGHT_BUILD
-          g_qlcpStats.heartbeatRx++;
-#endif
           s_sendAck(QLCP_PT_HEARTBEAT, payloadIn.payload_data.header_only.sequence);
           break;
         }
@@ -435,9 +415,6 @@ static void qlcpManagerTask(void *pvParams) {
             xEventGroupSetBits(g_qlcpEventGroup, QLCP_STREAM_ENABLE_BIT);
             LOG_INFO("QLCP Stream Start at %u Hz", freq);
           }
-#ifndef FLIGHT_BUILD
-          g_qlcpStats.streamStartRx++;
-#endif
           s_sendAck(QLCP_PT_STREAM_START, payloadIn.payload_data.header_only.sequence);
           break;
         }
@@ -446,9 +423,6 @@ static void qlcpManagerTask(void *pvParams) {
           xEventGroupClearBits(g_qlcpEventGroup, QLCP_STREAM_ENABLE_BIT);
           g_streamFrequencyHz = 0;
           LOG_INFO("QLCP Stream Stop");
-#ifndef FLIGHT_BUILD
-          g_qlcpStats.streamStopRx++;
-#endif
           s_sendAck(QLCP_PT_STREAM_STOP, payloadIn.payload_data.header_only.sequence);
           break;
         }
@@ -459,29 +433,20 @@ static void qlcpManagerTask(void *pvParams) {
           bool open = (cmdState == QLCP_CS_OPEN);
           bool ok = false;
 
-#ifndef FLIGHT_BUILD
-          g_qlcpStats.controlRx++;
-#endif
           LOG_INFO("Received control cmdId=%u state=%u", cmdId, cmdState);
 
           if (cmdId < 2) {
-            uint8_t endpoint = (cmdId == 0) ? NODE_ENDPOINT_VALVE1 : NODE_ENDPOINT_VALVE2;
+            uint8_t endpoint = (cmdId == 0) ? BOARD_ENDPOINT_VALVE1 : BOARD_ENDPOINT_VALVE2;
             ok = s_setLocalValveState(endpoint, open);
           } else if (cmdId < 4) {
 #ifdef MOCK_HARDWARE
             g_valveStates[cmdId] = open;
             ok = true;
 #else
-            uint8_t endpoint = (cmdId == 2) ? NODE_ENDPOINT_LOWER_BASE : (NODE_ENDPOINT_LOWER_BASE + 1);
+            uint8_t endpoint = (cmdId == 2) ? BOARD_ENDPOINT_LOWER_BASE : (BOARD_ENDPOINT_LOWER_BASE + 1);
             if (s_aimPtr != nullptr) {
-               const uint32_t payload = open ? NODE_ACTUATOR_OPEN : NODE_ACTUATOR_CLOSED;
-               ok = s_aimPtr->sendTimedPktEx(endpoint, s_aimPtr->syncedMillis(), payload, AIM_DEST_LPROP, AIM_TYP_VALVE);
-#ifndef FLIGHT_BUILD
-               if (ok) {
-                 g_canStats.txCount++;
-                 g_canStats.valveTx++;
-               }
-#endif
+               const uint32_t payload = open ? BOARD_ACTUATOR_OPEN : BOARD_ACTUATOR_CLOSED;
+               ok = s_aimPtr->sendTimedPktEx(endpoint, s_aimPtr->syncedMillis(), payload, AIM_DEST_LPROP, AIM_TYPE_VALVE);
             }
 #endif
           }
@@ -495,10 +460,6 @@ static void qlcpManagerTask(void *pvParams) {
         }
 
         case QLCP_PT_STATUS_REQUEST: {
-#ifndef FLIGHT_BUILD
-          g_qlcpStats.statusRequestRx++;
-          g_qlcpStats.tcpTxCount++;
-#endif
           payloadOut.packet_type = QLCP_PT_STATUS;
           
           qlcp_control_data controlData[4] = {};
@@ -557,9 +518,6 @@ static void qlcpTelemetryTask(void *pvParams) {
     pkt.sensor_count = 4;
 
     if (xQueueSend(g_netCtx.udp_send_queue_handle, &pkt, MESSAGE_QUEUE_TIMEOUT) == pdTRUE) {
-#ifndef FLIGHT_BUILD
-      g_qlcpStats.udpTxCount++;
-#endif
       (void)xSemaphoreTake(g_netCtx.udp_send_semaphore_handle, pdMS_TO_TICKS(50));
     }
 
@@ -577,7 +535,7 @@ static StackType_t g_managerTaskStack[8192];
 static StaticTask_t g_telemetryTaskBuffer;
 static StackType_t g_telemetryTaskStack[4096];
 
-void nodeStartTasks(AimNetwork& aim) {
+void boardStartTasks(AimNetwork& aim) {
   s_aimPtr = &aim;
 
   g_qlcpEventGroup = xEventGroupCreateStatic(&g_qlcpStaticEventGroup);
@@ -605,77 +563,37 @@ void nodeStartTasks(AimNetwork& aim) {
 }
 
 #ifndef FLIGHT_BUILD
-void nodePrintNetworkStatus(Print& out) {
-  out.println("\n=== Wi-Fi & QLCP Gateway Status ===");
-  out.print("SSID: "); out.println(WIFI_SSID);
-  out.print("Local IP: "); out.println(WiFi.localIP().toString().c_str());
-  out.print("RSSI: "); out.print(WiFi.RSSI()); out.println(" dBm");
-  out.print("QLCP State: "); out.println((xEventGroupGetBits(g_netCtx.wifi_event_group_handle) & SERVER_CONNECTED_BIT) ? "CONNECTED" : "DISCONNECTED");
-  out.print("Server IP: "); out.println(g_netCtx.server_ip);
-  out.print("Server TCP/UDP: "); out.print(g_netCtx.server_tcp_port); out.print(" / "); out.println(g_netCtx.server_udp_port);
-  out.println("QLCP Traffic Stats:");
-  out.print("  TCP Frame Rx: "); out.println(g_qlcpStats.tcpRxCount);
-  out.print("  TCP Frame Tx: "); out.println(g_qlcpStats.tcpTxCount);
-  out.print("  UDP Frame Tx (Data): "); out.println(g_qlcpStats.udpTxCount);
-  out.print("  CONFIG Frame Tx: "); out.println(g_qlcpStats.configSent);
-  out.print("  TIMESYNC Syncs: "); out.println(g_qlcpStats.timesyncCount);
-  out.print("  HEARTBEAT Rx: "); out.println(g_qlcpStats.heartbeatRx);
-  out.print("  CONTROL Cmds: "); out.println(g_qlcpStats.controlRx);
-  out.print("  STATUS REQs: "); out.println(g_qlcpStats.statusRequestRx);
-  out.print("  STREAM STRT/STP Rx: "); out.print(g_qlcpStats.streamStartRx); out.print(" / "); out.println(g_qlcpStats.streamStopRx);
+void boardPrintNetworkStatus(Print& out) {
+  out.printf("net=%s ip=%s rssi=%d qlcp=%c svr=%s:%u/%u\n", 
+    WIFI_SSID, WiFi.localIP().toString().c_str(), WiFi.RSSI(), 
+    (xEventGroupGetBits(g_netCtx.wifi_event_group_handle) & SERVER_CONNECTED_BIT) ? 'C' : 'D',
+    g_netCtx.server_ip, g_netCtx.server_tcp_port, g_netCtx.server_udp_port);
 }
 
-void nodePrintCanStatus(Print& out) {
-  out.println("\n=== AimNetwork CAN Node Status ===");
-  out.print("Primary Dest (Lower Node): 0x"); out.println(AIM_DEST_LPROP, HEX);
-  out.println("Lower Telemetry:");
-  out.print("  LOWER_PT1: "); out.print(g_ptValues[2]); out.println(" PSI");
-  out.print("  LOWER_PT2: "); out.print(g_ptValues[3]); out.println(" PSI");
-  out.println("Lower Valves:");
-  out.print("  LOWER_VALVE1: "); out.println(g_valveStates[2] ? "OPEN" : "CLOSED");
-  out.print("  LOWER_VALVE2: "); out.println(g_valveStates[3] ? "OPEN" : "CLOSED");
-  out.println("AimNetwork Frame Stats:");
-  out.print("  CAN Rx Count: "); out.println(g_canStats.rxCount);
-  out.print("  CAN Tx Count: "); out.println(g_canStats.txCount);
-  out.print("  SENSOR frame Rx: "); out.println(g_canStats.sensorRx);
-  out.print("  VALVE frame Rx/Tx: "); out.print(g_canStats.valveRx); out.print("/"); out.println(g_canStats.valveTx);
+void boardPrintSensorStatus(Print& out) {
+  out.printf("pt1=%.1f pt2=%.1f pt3=%.1f pt4=%.1f\n", 
+    g_ptValues[0], g_ptValues[1], g_ptValues[2], g_ptValues[3]);
 }
 
-void nodePrintSensorStatus(Print& out) {
-  out.println("\n=== Local Sensor & Valve Status ===");
-  out.println("Local Telemetry:");
-  out.print("  UPPER_PT1: "); out.print(g_ptValues[0]); out.println(" PSI");
-  out.print("  UPPER_PT2: "); out.print(g_ptValues[1]); out.println(" PSI");
-  out.println("Local Valves:");
-  out.print("  UPPER_VALVE1 (pin "); out.print(SOL1_EN_PIN); out.print("): "); out.println(g_valveStates[0] ? "OPEN" : "CLOSED");
-  out.print("  UPPER_VALVE2 (pin "); out.print(SOL2_EN_PIN); out.print("): "); out.println(g_valveStates[1] ? "OPEN" : "CLOSED");
-}
-
-bool nodeSetValveStateDirect(uint8_t index, bool open) {
+bool boardSetValveStateDirect(uint8_t index, bool open) {
   if (index >= 4) {
     return false;
   }
 
-  LOG_INFO("Direct console actuator override index=%u open=%d", index, open);
+  LOG_DEBUG("Direct console actuator override index=%u open=%d", index, open);
 
   if (index < 2) {
-    uint8_t endpoint = (index == 0) ? NODE_ENDPOINT_VALVE1 : NODE_ENDPOINT_VALVE2;
+    uint8_t endpoint = (index == 0) ? BOARD_ENDPOINT_VALVE1 : BOARD_ENDPOINT_VALVE2;
     return s_setLocalValveState(endpoint, open);
   } else {
 #ifdef MOCK_HARDWARE
     g_valveStates[index] = open;
     return true;
 #else
-    uint8_t endpoint = (index == 2) ? NODE_ENDPOINT_LOWER_BASE : (NODE_ENDPOINT_LOWER_BASE + 1);
+    uint8_t endpoint = (index == 2) ? BOARD_ENDPOINT_LOWER_BASE : (BOARD_ENDPOINT_LOWER_BASE + 1);
     if (s_aimPtr != nullptr) {
-      const uint32_t payload = open ? NODE_ACTUATOR_OPEN : NODE_ACTUATOR_CLOSED;
-      const bool ok = s_aimPtr->sendTimedPktEx(endpoint, s_aimPtr->syncedMillis(), payload, AIM_DEST_LPROP, AIM_TYP_VALVE);
-#ifndef FLIGHT_BUILD
-      if (ok) {
-        g_canStats.txCount++;
-        g_canStats.valveTx++;
-      }
-#endif
+      const uint32_t payload = open ? BOARD_ACTUATOR_OPEN : BOARD_ACTUATOR_CLOSED;
+      const bool ok = s_aimPtr->sendTimedPktEx(endpoint, s_aimPtr->syncedMillis(), payload, AIM_DEST_LPROP, AIM_TYPE_VALVE);
       return ok;
     }
     return false;
@@ -683,7 +601,7 @@ bool nodeSetValveStateDirect(uint8_t index, bool open) {
   }
 }
 
-bool nodeGetValveState(uint8_t index) {
+bool boardGetValveState(uint8_t index) {
   if (index < 4) {
     return g_valveStates[index];
   }
