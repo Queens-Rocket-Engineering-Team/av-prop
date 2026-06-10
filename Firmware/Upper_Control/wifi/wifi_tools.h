@@ -2,55 +2,45 @@
 
 #include <esp_err.h>
 #include <esp_netif.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/event_groups.h>
 #include <netdb.h>
 #include <stdint.h>
 #include <stdbool.h>
 
-#define MESSAGE_QUEUE_TIMEOUT (pdMS_TO_TICKS(10))
+#include "qlcp_lib.h"
 
-#define SERVER_CONNECTED_BIT 1
-
-enum {
-    SIG_WIFI_DISCONN = (1 << 0),
-    SIG_WIFI_CONN = (1 << 1),
-    SIG_SERVER_DISCONN = (1 << 2),
-    SIG_SERVER_RETRY = (1 << 3),
-    SIG_SSDP_GOT_SERVER = (1 << 4),
-    SIG_TCP_CONN_SERVER = (1 << 5),
-};
+// Non-blocking, FreeRTOS-free socket layer for the QLCP link.
+// Every *_service() call is bounded (one poll / a few hundred bytes) so the
+// whole layer can be driven from the main loop under the task watchdog.
+// Service return convention: 1 = progress/done, 0 = nothing yet, -1 = error
+// (caller closes and re-discovers).
 
 typedef struct {
     esp_netif_t *netif_handle;
     char server_ip[IPADDR_STRLEN_MAX];
     uint16_t server_tcp_port;
     uint16_t server_udp_port;
-    int32_t server_tcp_sock;
-    int32_t server_udp_sock;
+    int32_t tcp_sock;
+    int32_t udp_sock;
     int32_t ssdp_sock;
-    QueueHandle_t tcp_recv_queue_handle;
-    QueueHandle_t tcp_send_queue_handle;
-    QueueHandle_t udp_send_queue_handle;
-    SemaphoreHandle_t udp_send_semaphore_handle;
-    EventGroupHandle_t wifi_event_group_handle;
-    TaskHandle_t network_manager_handle;
-    TaskHandle_t tcp_recv_handle;
-    TaskHandle_t tcp_send_handle;
-    TaskHandle_t udp_send_handle;
-    bool config_sent;
-} network_ctx_t;
+} net_link_t;
 
-esp_err_t wifi_event_handler_register(network_ctx_t *network_ctx);
+void net_link_init(net_link_t *link);
+void net_link_close_all(net_link_t *link);
 
-esp_err_t network_manager_init(network_ctx_t *network_ctx);
+// SSDP discovery: the QLCP server multicasts M-SEARCH; we learn its IP from
+// the packet's source address. The socket stays open across service calls.
+esp_err_t ssdp_listen_begin(net_link_t *link);
+int ssdp_listen_service(net_link_t *link); // 1 = server_ip filled
+void ssdp_listen_end(net_link_t *link);
 
-esp_err_t ssdp_discover_server(int32_t *sock, char server_ip[], size_t server_ip_len, esp_netif_t *netif_handle);
-esp_err_t tcp_connect_to_server(int32_t *sock, const char server_ip[], uint16_t server_port);
-esp_err_t udp_create_socket(int32_t *sock, const char server_ip[], uint16_t server_port);
+// TCP control channel (non-blocking connect + incremental framing).
+esp_err_t tcp_connect_begin(net_link_t *link);
+int tcp_connect_service(net_link_t *link); // 1 = connected
+int tcp_rx_service(net_link_t *link, qlcp_client_payload *out); // 1 = packet decoded into out
+int tcp_tx_payload(net_link_t *link, const qlcp_server_payload *payload); // 0 = accepted, 1 = busy (retry next tick), -1 = error
+int tcp_tx_service(net_link_t *link); // 1 = idle, 0 = still draining
+void tcp_link_close(net_link_t *link);
 
-void network_state_manager(void *pvParams);
-
-void tcp_client_recv(void *pvParams);
-void tcp_client_send(void *pvParams);
-void udp_client_send(void *pvParams);
+// UDP telemetry channel (lossy by design — full buffers drop the datagram).
+esp_err_t udp_create_socket(net_link_t *link);
+int udp_send_data(net_link_t *link, const qlcp_data_packet *data); // 0 = sent or dropped

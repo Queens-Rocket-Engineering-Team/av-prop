@@ -111,7 +111,9 @@ bool boardHandleCanPacket(const aimPkt& pkt, uint32_t networkNowMs, AimNetwork& 
 // Add board-specific periodic behavior in boardUpdate().
 void boardUpdate(uint32_t schedulerNowMs);
 
-void boardStartTasks(AimNetwork& aim);
+// Kicks off the WiFi/QLCP connection state machine; the link is serviced
+// non-blockingly from boardUpdate() every loop tick.
+void boardStartNetwork(AimNetwork& aim);
 
 #ifndef FLIGHT_BUILD
 void boardPrintNetworkStatus(Print& out);

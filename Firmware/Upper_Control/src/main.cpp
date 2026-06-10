@@ -205,7 +205,7 @@ void setup(void) {
   Serial.println("Console ready. d=enter debug");
 #endif
   g_schedulerState.lastHeartbeatTxMs = millis();
-  boardStartTasks(g_aim);
+  boardStartNetwork(g_aim);
   transitionTo(OPERATIONAL);
 }
 
