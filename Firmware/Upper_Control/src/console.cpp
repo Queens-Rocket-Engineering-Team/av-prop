@@ -3,11 +3,11 @@
 #ifndef FLIGHT_BUILD
 
 #include "board.h"
+#include "board_config.h"
 #include <logger.h>
 #include <aim_can_driver.h>
 #include <AimFileSystem.h>
 #include <AimFlightRecorder.h>
-#include <AimConfigStore.h>
 
 #include <cstdlib>
 #include <cstring>
@@ -18,7 +18,6 @@ static constexpr uint32_t kCtrlAEntryGuardMs     = 750U;
 static constexpr uint8_t  kInputBufLen           = 32U;
 static constexpr uint8_t  kMenuStackDepthMax     = 4U;
 static constexpr uint8_t  kDumpRowsPerTick       = 32U;
-static constexpr char     kConfigPath[]          = "/config.json";
 
 enum ConsoleMenu : uint8_t {
   CONSOLE_MENU_ROOT                = 0U,
@@ -38,7 +37,6 @@ static AimCanDriver*      s_canDriver   = nullptr;
 static Logger*            s_log         = nullptr;
 static AimFileSystem*     s_fs          = nullptr;
 static AimFlightRecorder* s_recorder    = nullptr;
-static AimConfigStore*    s_configStore = nullptr;
 static BoardConfig*       s_boardConfig = nullptr;
 
 static ConsoleMenu s_menu = CONSOLE_MENU_ROOT;
@@ -48,6 +46,8 @@ static uint8_t     s_menuDepth = 0U;
 static BoardConfig s_savedBoardConfig = {};
 static bool        s_configDiscardArmed = false;
 static uint32_t    s_lastCtrlAEntryMs = 0U;
+static uint8_t     s_bootCanId = 0U;            // canId active since boot
+static bool        s_storageResetPending = false;  // set after format; cleared by reboot only
 
 static char    s_inputBuf[kInputBufLen];
 static uint8_t s_inputLen = 0U;
@@ -55,7 +55,7 @@ static uint8_t s_inputLen = 0U;
 static bool consoleReady(void) {
   return (s_serial != nullptr) && (s_aim != nullptr) && (s_canDriver != nullptr) &&
          (s_log != nullptr) && (s_fs != nullptr) && (s_recorder != nullptr) &&
-         (s_configStore != nullptr) && (s_boardConfig != nullptr);
+         (s_boardConfig != nullptr);
 }
 
 static void copyBoardConfig(BoardConfig& dst, const BoardConfig& src) {
@@ -144,19 +144,25 @@ static bool parseCanId(uint8_t& outCanId) {
 }
 
 static void saveConfig(void) {
-  JsonDocument doc;
-  if (!s_configStore->load(kConfigPath, doc)) {
-    doc.clear();
-  }
-  doc["boardName"] = s_boardConfig->boardName;
-  doc["canId"]     = s_boardConfig->canId;
-
-  if (s_configStore->save(kConfigPath, doc)) {
+  if (configSaveBoard(*s_boardConfig) == ConfigStatus::OK) {
     copyBoardConfig(s_savedBoardConfig, *s_boardConfig);
     s_configDiscardArmed = false;
-    s_serial->println("[OK] config saved — reboot required for CAN ID");
+    s_serial->println("[OK] config saved");
+    if (s_boardConfig->canId != s_bootCanId) {
+      s_serial->println("[!] reboot required for CAN ID change");
+    }
   } else {
     s_serial->println("[ERR] config save failed");
+  }
+}
+
+static void resetConfig(void) {
+  if (configResetBoard() == ConfigStatus::OK) {
+    s_serial->printf("ram:   name=%s can=%u (active until reboot)\n",
+                     s_boardConfig->boardName, s_boardConfig->canId);
+    s_serial->println("flash: identity cleared — compiled defaults on next boot");
+  } else {
+    s_serial->println("[ERR] config reset failed");
   }
 }
 
@@ -170,8 +176,13 @@ static void showMenu(ConsoleMenu menu) {
       s_serial->println("DBG > LOG [q:exit b:back] 0:off 1:dbg 2:inf 3:wrn 4:err 5:all 6:iwe");
       break;
     case CONSOLE_MENU_FLASH:
-      s_serial->printf("DBG > FLS [q:exit b:back] 1:inf 2:dmp 3:ers 4:cfg  [%uB/%uB]\n",
-                       s_fs->getUsedSize(), s_fs->getTotalSize());
+      if (s_storageResetPending) {
+        // Restricted mode: must keep the literal "FLS [" — extract_tool waits on it.
+        s_serial->println("DBG > FLS [q:exit b:back] storage reset — reboot required");
+      } else {
+        s_serial->printf("DBG > FLS [q:exit b:back] 1:inf 2:dmp 3:ers 4:cfg  [%uB/%uB]\n",
+                         s_fs->getUsedSize(), s_fs->getTotalSize());
+      }
       break;
     case CONSOLE_MENU_FLASH_ERASE_CONFIRM:
       s_serial->println("DBG > FLS > ERS [q:exit b:back] 1:confirm");
@@ -300,7 +311,6 @@ bool consoleInit(Stream& serial,
                  Logger& log,
                  AimFileSystem& fs,
                  AimFlightRecorder& recorder,
-                 AimConfigStore& configStore,
                  BoardConfig& boardConfig) {
   s_serial      = &serial;
   s_aim         = &aim;
@@ -308,8 +318,9 @@ bool consoleInit(Stream& serial,
   s_log         = &log;
   s_fs          = &fs;
   s_recorder    = &recorder;
-  s_configStore = &configStore;
   s_boardConfig = &boardConfig;
+  s_bootCanId   = boardConfig.canId;
+  s_storageResetPending = false;
   resetMenu();
   copyBoardConfig(s_savedBoardConfig, boardConfig);
   return consoleReady();
@@ -391,6 +402,12 @@ ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
       break;
 
     case CONSOLE_MENU_FLASH:
+      // After a format, only back/exit work until reboot — every post-format
+      // dump/config combination is invalid rather than individually handled.
+      if (s_storageResetPending && (c != 'b')) {
+        s_serial->println("[ERR] reboot required");
+        break;
+      }
       switch (c) {
         case 'b': popMenu(); break;
         case '1': s_serial->printf("ready=%d total=%u used=%u\n",
@@ -412,7 +429,12 @@ ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
       switch (c) {
         case 'b': popMenu(); break;
         case '1':
-          s_serial->println(s_fs->format() ? "[OK] flash erased" : "[ERR] erase failed");
+          if (storageFormatForMaintenance() == ConfigStatus::OK) {
+            s_storageResetPending = true;
+            s_serial->println("[OK] flash erased — reboot required before dump/config operations");
+          } else {
+            s_serial->println("[ERR] erase failed");
+          }
           popMenu();
           break;
         default: handled = false; break;
@@ -426,14 +448,8 @@ ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
         case '1': beginInput(CONSOLE_MENU_CONFIG_NAME); break;
         case '2': beginInput(CONSOLE_MENU_CONFIG_CAN); break;
         case '3': saveConfig(); break;
-        case '4':
-          s_fs->removeFile(kConfigPath);
-          s_serial->println("[OK] config removed — reboot to apply");
-          break;
-        case '5':
-          s_serial->println("[CFG]");
-          s_serial->println(s_fs->streamFile(kConfigPath, *s_serial) ? "\n[/CFG]" : "err\n[/CFG]");
-          break;
+        case '4': resetConfig(); break;
+        case '5': (void)configPrintBoard(*s_serial); break;
         default: handled = false; break;
       }
       break;

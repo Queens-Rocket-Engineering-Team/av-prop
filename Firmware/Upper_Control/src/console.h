@@ -11,7 +11,6 @@ class AimCanDriver;
 class Logger;
 class AimFileSystem;
 class AimFlightRecorder;
-class AimConfigStore;
 struct BoardConfig;
 
 enum ConsoleAction : uint8_t {
@@ -27,7 +26,6 @@ bool consoleInit(Stream& serial,
                  Logger& log,
                  AimFileSystem& fs,
                  AimFlightRecorder& recorder,
-                 AimConfigStore& configStore,
                  BoardConfig& boardConfig);
 
 ConsoleAction consoleCheckEntry(void);

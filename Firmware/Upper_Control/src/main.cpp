@@ -197,7 +197,7 @@ void setup(void) {
     return;
   }
 #ifndef FLIGHT_BUILD
-  if (!consoleInit(Serial, g_aim, g_canHw, g_log, g_fs, g_flightRecorder, g_configStore, g_boardConfig)) {
+  if (!consoleInit(Serial, g_aim, g_canHw, g_log, g_fs, g_flightRecorder, g_boardConfig)) {
     LOG_ERROR("Console init failed");
     transitionTo(FAULT);
     return;
