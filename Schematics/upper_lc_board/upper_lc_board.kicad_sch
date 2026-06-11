@@ -2,18 +2,43 @@
 	(version 20231120)
 	(generator "eeschema")
 	(generator_version "8.0")
-	(uuid "9b1a1d2a-fad7-4f10-83f3-1f83e9656c75")
+	(uuid "8de962ac-ee95-4233-a205-efbcd04063bc")
 	(paper "A4")
 	(title_block
-		(title "PHEONIX | Upper Control Board")
-		(rev "A")
+		(title "QRET 25-26 SRAD Hybrid Upper Control Module")
 		(company "Queen's Rocket Engineering Team")
-		(comment 1 "Jeevan Sanchez")
+		(comment 1 "Upper Control Board V2")
+		(comment 2 "Jeevan Sanchez, Tristan Alderson")
 	)
 	(lib_symbols)
+	(text "- added pwr switching for PTs\n- removed TCs "
+		(exclude_from_sim no)
+		(at 218.186 55.626 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+				(color 0 0 0 1)
+			)
+			(justify left)
+		)
+		(uuid "02cb9092-18d3-486e-937f-42fee85cf7ab")
+	)
+	(text "upper V2 design notes"
+		(exclude_from_sim no)
+		(at 229.108 51.054 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.254)
+				(bold yes)
+				(color 0 0 0 1)
+			)
+		)
+		(uuid "79ab1d8b-ca32-48cd-9c4a-eda4edd424af")
+	)
 	(sheet
-		(at 72.136 102.616)
-		(size 54.61 33.02)
+		(at 147.066 95.504)
+		(size 56.134 38.608)
 		(fields_autoplaced yes)
 		(stroke
 			(width 0.1524)
@@ -22,9 +47,9 @@
 		(fill
 			(color 0 0 0 0.0000)
 		)
-		(uuid "03f1622b-3dda-4e29-911f-7cc762ec6c20")
-		(property "Sheetname" "Sensor Circuitry"
-			(at 72.136 101.9044 0)
+		(uuid "32a8ecec-3c56-4fc7-b1a3-95683e41c1c6")
+		(property "Sheetname" "Sensing Circuitry"
+			(at 147.066 94.7924 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -32,8 +57,8 @@
 				(justify left bottom)
 			)
 		)
-		(property "Sheetfile" "modules/sensor_module/sensor_module.kicad_sch"
-			(at 72.136 136.2206 0)
+		(property "Sheetfile" "sensing_module.kicad_sch"
+			(at 147.066 134.6966 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -43,15 +68,15 @@
 		)
 		(instances
 			(project "upper_lc_board"
-				(path "/9b1a1d2a-fad7-4f10-83f3-1f83e9656c75"
-					(page "4")
+				(path "/8de962ac-ee95-4233-a205-efbcd04063bc"
+					(page "5")
 				)
 			)
 		)
 	)
 	(sheet
-		(at 71.12 44.45)
-		(size 54.61 33.02)
+		(at 147.32 50.292)
+		(size 55.118 36.576)
 		(fields_autoplaced yes)
 		(stroke
 			(width 0.1524)
@@ -60,47 +85,9 @@
 		(fill
 			(color 0 0 0 0.0000)
 		)
-		(uuid "1d6cfe1a-a78a-448d-9dfa-b2b78f04d682")
-		(property "Sheetname" "ESP Breakout Cirucitry"
-			(at 71.12 43.7384 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left bottom)
-			)
-		)
-		(property "Sheetfile" "modules/ESP_breakout_module/ESP_breakout_module.kicad_sch"
-			(at 71.12 78.0546 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left top)
-			)
-		)
-		(instances
-			(project "upper_lc_board"
-				(path "/9b1a1d2a-fad7-4f10-83f3-1f83e9656c75"
-					(page "2")
-				)
-			)
-		)
-	)
-	(sheet
-		(at 153.67 44.45)
-		(size 54.61 33.02)
-		(fields_autoplaced yes)
-		(stroke
-			(width 0.1524)
-			(type solid)
-		)
-		(fill
-			(color 0 0 0 0.0000)
-		)
-		(uuid "4448a9b0-3cba-4e30-89c0-980036e20f76")
+		(uuid "94566a7d-86bb-4a04-89fe-f21a893d6a23")
 		(property "Sheetname" "Power Circuitry"
-			(at 153.67 43.7384 0)
+			(at 147.32 49.5804 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -108,8 +95,8 @@
 				(justify left bottom)
 			)
 		)
-		(property "Sheetfile" "modules/power_module/power_module.kicad_sch"
-			(at 153.67 78.0546 0)
+		(property "Sheetfile" "power_module.kicad_sch"
+			(at 147.32 87.4526 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -119,15 +106,15 @@
 		)
 		(instances
 			(project "upper_lc_board"
-				(path "/9b1a1d2a-fad7-4f10-83f3-1f83e9656c75"
+				(path "/8de962ac-ee95-4233-a205-efbcd04063bc"
 					(page "3")
 				)
 			)
 		)
 	)
 	(sheet
-		(at 154.94 102.87)
-		(size 54.61 33.02)
+		(at 68.326 95.758)
+		(size 55.626 38.354)
 		(fields_autoplaced yes)
 		(stroke
 			(width 0.1524)
@@ -136,9 +123,9 @@
 		(fill
 			(color 0 0 0 0.0000)
 		)
-		(uuid "f003a3ad-0ca0-4253-bb6a-1aee93b0e37f")
+		(uuid "bb8d84b9-ecb3-4da4-948c-d0cf2dc1ed2d")
 		(property "Sheetname" "Solenoid Driver Circuitry"
-			(at 154.94 102.1584 0)
+			(at 68.326 95.0464 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -146,8 +133,8 @@
 				(justify left bottom)
 			)
 		)
-		(property "Sheetfile" "modules/solenoid_module/solenoid_module.kicad_sch"
-			(at 154.94 136.4746 0)
+		(property "Sheetfile" "actuation_module.kicad_sch"
+			(at 68.326 134.6966 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -157,8 +144,46 @@
 		)
 		(instances
 			(project "upper_lc_board"
-				(path "/9b1a1d2a-fad7-4f10-83f3-1f83e9656c75"
-					(page "5")
+				(path "/8de962ac-ee95-4233-a205-efbcd04063bc"
+					(page "4")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 68.58 50.292)
+		(size 55.372 37.338)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "fb03bfcd-cf55-42d7-9f53-690866bb15a9")
+		(property "Sheetname" "ESP32-S3 Breakout Circuitry"
+			(at 68.58 49.5804 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "esp32_breakout_module.kicad_sch"
+			(at 68.58 88.2146 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "upper_lc_board"
+				(path "/8de962ac-ee95-4233-a205-efbcd04063bc"
+					(page "2")
 				)
 			)
 		)

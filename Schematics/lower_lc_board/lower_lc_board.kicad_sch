@@ -5,10 +5,10 @@
 	(uuid "d63798c4-e363-437e-9012-e4aff32e6642")
 	(paper "A4")
 	(title_block
-		(title "HYDRA | Lower Control Board")
-		(rev "A")
+		(title "QRET 25-26 SRAD Hybrid Lower Control Module")
+		(rev "V1.0")
 		(company "Queen's Rocket Engineering Team")
-		(comment 1 "Jeevan Sanchez")
+		(comment 1 "Contributors: Jeevan Sanchez, Tristan Alderson")
 	)
 	(lib_symbols)
 	(sheet

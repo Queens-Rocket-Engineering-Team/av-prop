@@ -51,13 +51,7 @@
           "min_clearance": 0.5
         }
       },
-      "diff_pair_dimensions": [
-        {
-          "gap": 0.0,
-          "via_gap": 0.0,
-          "width": 0.0
-        }
-      ],
+      "diff_pair_dimensions": [],
       "drc_exclusions": [],
       "meta": {
         "version": 2
@@ -177,12 +171,16 @@
           "td_width_to_size_filter_ratio": 0.9
         }
       ],
+<<<<<<<< HEAD:Schematics/hall_effect_board/hall_effect_board.kicad_pro
+      "track_widths": [],
+========
       "track_widths": [
         0.0,
         0.3,
         0.5,
         1.0
       ],
+>>>>>>>> main:Schematics/dummy_24v_board/dummy_24v_board.kicad_pro
       "tuning_pattern_settings": {
         "diff_pair_defaults": {
           "corner_radius_percentage": 80,
@@ -209,24 +207,7 @@
           "spacing": 0.6
         }
       },
-      "via_dimensions": [
-        {
-          "diameter": 0.0,
-          "drill": 0.0
-        },
-        {
-          "diameter": 0.6,
-          "drill": 0.3
-        },
-        {
-          "diameter": 0.8,
-          "drill": 0.4
-        },
-        {
-          "diameter": 1.0,
-          "drill": 0.5
-        }
-      ],
+      "via_dimensions": [],
       "zones_allow_external_fillets": false
     },
     "ipc2581": {
@@ -459,7 +440,11 @@
     "pinned_symbol_libs": []
   },
   "meta": {
+<<<<<<<< HEAD:Schematics/hall_effect_board/hall_effect_board.kicad_pro
+    "filename": "hall_effect_board.kicad_pro",
+========
     "filename": "dummy_24v_board.kicad_pro",
+>>>>>>>> main:Schematics/dummy_24v_board/dummy_24v_board.kicad_pro
     "version": 1
   },
   "net_settings": {
@@ -609,7 +594,11 @@
   },
   "sheets": [
     [
+<<<<<<<< HEAD:Schematics/hall_effect_board/hall_effect_board.kicad_pro
+      "cea352d5-1e3c-4af0-8669-14f849063771",
+========
       "f0325854-a423-47be-953e-4a5cbde51c3f",
+>>>>>>>> main:Schematics/dummy_24v_board/dummy_24v_board.kicad_pro
       "Root"
     ]
   ],

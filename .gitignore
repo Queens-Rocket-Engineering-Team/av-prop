@@ -1,8 +1,6 @@
 # For PCBs designed using KiCad: https://www.kicad.org/
 # Format documentation: https://kicad.org/help/file-formats/
 
-*.json
-
 # Temporary files
 *.000
 *.bak
@@ -45,3 +43,10 @@ fp-info-cache
 
 #vscode config
 *.vscode
+
+*.pio
+CLAUDE.md
+
+# Build/tooling artifacts
+dist/
+.venv/

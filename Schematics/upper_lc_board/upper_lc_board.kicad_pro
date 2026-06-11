@@ -37,9 +37,9 @@
         "other_text_thickness": 0.15,
         "other_text_upright": false,
         "pads": {
-          "drill": 0.0,
-          "height": 0.95,
-          "width": 0.8
+          "drill": 0.762,
+          "height": 1.524,
+          "width": 1.524
         },
         "silk_line_width": 0.1,
         "silk_text_italic": false,
@@ -58,26 +58,51 @@
           "width": 0.0
         }
       ],
-      "drc_exclusions": [],
+      "drc_exclusions": [
+        "copper_edge_clearance|152210000|63686334|c7629494-5155-4f5f-9182-dc89018b96c1|76ed50bd-af2a-4a25-b96c-ab928bcd048e",
+        "copper_edge_clearance|152210000|63686334|c7629494-5155-4f5f-9182-dc89018b96c1|e8a9c889-37cb-4628-8cdc-ae8021d064b0",
+        "drill_out_of_range|133550000|110090000|b5ae3c3a-4682-4964-a812-53b53b7fa613|00000000-0000-0000-0000-000000000000",
+        "drill_out_of_range|133550000|111490000|76840eae-2596-49ea-83d1-250917f817e8|00000000-0000-0000-0000-000000000000",
+        "drill_out_of_range|134250000|109390000|173b69c2-31fb-402e-bd8a-d288972b980e|00000000-0000-0000-0000-000000000000",
+        "drill_out_of_range|134250000|110790000|94b7ebeb-a3c9-458b-b86d-16e06938d46c|00000000-0000-0000-0000-000000000000",
+        "drill_out_of_range|134250000|112190000|99132dba-ecfe-4752-9774-0fee2db8b1fc|00000000-0000-0000-0000-000000000000",
+        "drill_out_of_range|134950000|110090000|b1773738-3172-4f0b-9b2d-efd3fd6b08f5|00000000-0000-0000-0000-000000000000",
+        "drill_out_of_range|134950000|111490000|6468cc44-e320-40f0-a250-b4a7e0d7b7fa|00000000-0000-0000-0000-000000000000",
+        "drill_out_of_range|135650000|109390000|a798762f-22f7-48f7-9634-81fcfe3ea60d|00000000-0000-0000-0000-000000000000",
+        "drill_out_of_range|135650000|110790000|87980539-3132-468b-80d4-31a525b55dff|00000000-0000-0000-0000-000000000000",
+        "drill_out_of_range|135650000|112190000|b97a4df4-18a1-4864-9f61-239529c3de56|00000000-0000-0000-0000-000000000000",
+        "drill_out_of_range|136350000|110090000|b5136f82-640a-4e26-b05d-0750ad431c28|00000000-0000-0000-0000-000000000000",
+        "drill_out_of_range|136350000|111490000|75e7072e-37ad-4228-a434-69d7d5192854|00000000-0000-0000-0000-000000000000",
+        "silk_edge_clearance|124250000|120000000|be2d33bd-8f3b-4ae3-8da7-a38fcc87d523|6a01ef9c-932d-45ee-9506-092532c3d479",
+        "silk_edge_clearance|142650000|120000000|be2d33bd-8f3b-4ae3-8da7-a38fcc87d523|9de72e3f-7700-4cd9-ae33-2317152de2fd",
+        "silk_over_copper|155811361|115880871|a469d8e6-a74f-4770-b49e-2e5f7448c60c|00000000-0000-0000-0000-000000000000",
+        "silk_over_copper|155920387|115840000|e1c8e179-29c8-4da6-99c2-7e4a9300fe96|00000000-0000-0000-0000-000000000000",
+        "silk_over_copper|156450000|112360000|d84989e7-da6f-4e80-a4fe-89434cff8eca|00000000-0000-0000-0000-000000000000",
+        "silk_overlap|171500000|113700000|646da6ad-1aff-4b92-a337-cf4d0d718ae6|468e4966-1637-46bc-8e87-6131e8ec4a76",
+        "silk_overlap|171500000|114500000|646da6ad-1aff-4b92-a337-cf4d0d718ae6|817848d0-dd1f-4b04-a280-459feb88cb2c",
+        "silk_overlap|171500000|114500000|646da6ad-1aff-4b92-a337-cf4d0d718ae6|b0ed603a-a7bf-4457-a6a3-8eb0f057e2a6",
+        "starved_thermal|124700000|118510000|3ef65466-6a20-440a-a90a-66a55020985a|6e23cf88-9b54-42f8-8516-1b49f642e8fb|F.Cu",
+        "starved_thermal|142200000|118510000|3ef65466-6a20-440a-a90a-66a55020985a|b0d33ee5-9d27-4c97-a20f-163ca92a9228|F.Cu"
+      ],
       "meta": {
         "version": 2
       },
       "rule_severities": {
         "annular_width": "error",
-        "clearance": "ignore",
+        "clearance": "error",
         "connection_width": "warning",
-        "copper_edge_clearance": "ignore",
+        "copper_edge_clearance": "error",
         "copper_sliver": "warning",
         "courtyards_overlap": "error",
         "diff_pair_gap_out_of_range": "error",
         "diff_pair_uncoupled_length_too_long": "error",
-        "drill_out_of_range": "warning",
+        "drill_out_of_range": "error",
         "duplicate_footprints": "warning",
         "extra_footprint": "warning",
         "footprint": "error",
         "footprint_symbol_mismatch": "warning",
         "footprint_type_mismatch": "ignore",
-        "hole_clearance": "ignore",
+        "hole_clearance": "error",
         "hole_near_hole": "error",
         "holes_co_located": "warning",
         "invalid_outline": "error",
@@ -100,9 +125,9 @@
         "silk_over_copper": "warning",
         "silk_overlap": "warning",
         "skew_out_of_range": "error",
-        "solder_mask_bridge": "ignore",
-        "starved_thermal": "ignore",
-        "text_height": "ignore",
+        "solder_mask_bridge": "error",
+        "starved_thermal": "error",
+        "text_height": "warning",
         "text_thickness": "warning",
         "through_hole_pad_without_hole": "error",
         "too_many_vias": "error",
@@ -179,6 +204,7 @@
       ],
       "track_widths": [
         0.0,
+        0.2,
         0.3,
         0.5,
         1.0
@@ -432,7 +458,7 @@
       "extra_units": "error",
       "global_label_dangling": "warning",
       "hier_label_mismatch": "error",
-      "label_dangling": "warning",
+      "label_dangling": "error",
       "lib_symbol_issues": "warning",
       "missing_bidi_pin": "warning",
       "missing_input_pin": "warning",
@@ -442,10 +468,10 @@
       "net_not_bus_member": "warning",
       "no_connect_connected": "warning",
       "no_connect_dangling": "warning",
-      "pin_not_connected": "warning",
-      "pin_not_driven": "warning",
-      "pin_to_pin": "error",
-      "power_pin_not_driven": "warning",
+      "pin_not_connected": "error",
+      "pin_not_driven": "error",
+      "pin_to_pin": "warning",
+      "power_pin_not_driven": "error",
       "similar_labels": "warning",
       "simulation_model_issue": "ignore",
       "unannotated": "error",
@@ -494,10 +520,10 @@
       "gencad": "",
       "idf": "",
       "netlist": "",
-      "plot": "Gerber/",
+      "plot": "",
       "pos_files": "",
       "specctra_dsn": "",
-      "step": "",
+      "step": "../../../../../Downloads/upper_lc_board.step",
       "svg": "",
       "vrml": ""
     },
@@ -536,7 +562,7 @@
           "group_by": false,
           "label": "Datasheet",
           "name": "Datasheet",
-          "show": true
+          "show": false
         },
         {
           "group_by": false,
@@ -551,10 +577,10 @@
           "show": true
         },
         {
-          "group_by": true,
+          "group_by": false,
           "label": "DNP",
           "name": "${DNP}",
-          "show": true
+          "show": false
         },
         {
           "group_by": false,
@@ -584,12 +610,6 @@
           "group_by": false,
           "label": "Digikey",
           "name": "Digikey",
-          "show": true
-        },
-        {
-          "group_by": false,
-          "label": "JLCPCB",
-          "name": "JLCPCB",
           "show": true
         },
         {
@@ -624,12 +644,6 @@
         },
         {
           "group_by": false,
-          "label": "Model",
-          "name": "Model",
-          "show": false
-        },
-        {
-          "group_by": false,
           "label": "PARTREV",
           "name": "PARTREV",
           "show": false
@@ -642,20 +656,8 @@
         },
         {
           "group_by": false,
-          "label": "Price",
-          "name": "Price",
-          "show": false
-        },
-        {
-          "group_by": false,
           "label": "STANDARD",
           "name": "STANDARD",
-          "show": false
-        },
-        {
-          "group_by": false,
-          "label": "SnapEDA_Link",
-          "name": "SnapEDA_Link",
           "show": false
         },
         {
@@ -666,7 +668,7 @@
         }
       ],
       "filter_string": "",
-      "group_symbols": true,
+      "group_symbols": false,
       "name": "",
       "sort_asc": true,
       "sort_field": "Reference"
@@ -712,44 +714,40 @@
   },
   "sheets": [
     [
-      "9b1a1d2a-fad7-4f10-83f3-1f83e9656c75",
+      "8de962ac-ee95-4233-a205-efbcd04063bc",
       "Root"
     ],
     [
-      "1d6cfe1a-a78a-448d-9dfa-b2b78f04d682",
-      "ESP Breakout Cirucitry"
+      "fb03bfcd-cf55-42d7-9f53-690866bb15a9",
+      "ESP32-S3 Breakout Circuitry"
     ],
     [
-      "4448a9b0-3cba-4e30-89c0-980036e20f76",
+      "94566a7d-86bb-4a04-89fe-f21a893d6a23",
       "Power Circuitry"
     ],
     [
-      "03f1622b-3dda-4e29-911f-7cc762ec6c20",
-      "Sensor Circuitry"
-    ],
-    [
-      "f003a3ad-0ca0-4253-bb6a-1aee93b0e37f",
+      "bb8d84b9-ecb3-4da4-948c-d0cf2dc1ed2d",
       "Solenoid Driver Circuitry"
     ],
     [
-      "65115d6c-240a-4886-8e54-c37424bab0b6",
-      "Valve Control 2"
+      "32a8ecec-3c56-4fc7-b1a3-95683e41c1c6",
+      "Sensing Circuitry"
     ],
     [
-      "1bd8ce37-8ddd-4ff8-9ae8-5224bdd9bb9e",
+      "94e68ee1-e1f2-4047-b299-1f0f2281affb",
       "Valve Control 1"
     ],
     [
-      "053ff26d-da11-4577-8dd0-32aaebff2a7b",
+      "cf6cc7ca-f6f8-4955-86eb-3247d55d8f2c",
+      "Valve Control 2"
+    ],
+    [
+      "109a8a0a-c437-459f-9af6-d5e34f50799c",
       "PT-1"
     ],
     [
-      "3fcdaac5-2869-40f8-b925-cf310375456d",
+      "b149431a-f253-4ff6-90dc-e615cf93c3d3",
       "PT-2"
-    ],
-    [
-      "911e7585-9a9d-4803-9ce9-9fc1f19be4ae",
-      "TC Conditoning + CJC"
     ]
   ],
   "text_variables": {}

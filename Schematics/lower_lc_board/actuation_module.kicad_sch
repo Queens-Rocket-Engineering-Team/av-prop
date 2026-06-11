@@ -5,10 +5,11 @@
 	(uuid "035353f5-5a1c-4603-af0d-cd0330063b42")
 	(paper "A4")
 	(title_block
-		(title "HYDRA | Actuation Circuitry")
-		(rev "2")
+		(title "Solenoid Driver Circuitry")
+		(rev "V1.0")
 		(company "Queen's Rocket Engineering Team")
-		(comment 1 "Jeevan Sanchez")
+		(comment 1 "Contributors: Jeevan Sanchez, Tristan Alderson")
+		(comment 2 "HYDRA - Lower Control Board")
 	)
 	(lib_symbols
 		(symbol "Connector:TestPoint"
@@ -1557,6 +1558,12 @@
 		)
 	)
 	(junction
+		(at 97.79 149.86)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "44c36c16-a29b-431f-9a1c-43400523b831")
+	)
+	(junction
 		(at 87.63 110.49)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -1578,6 +1585,16 @@
 		)
 		(uuid "00619042-e058-4050-a8f0-41f24ae1077a")
 	)
+	(wire
+		(pts
+			(xy 97.79 149.86) (xy 99.06 149.86)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2987651e-d3da-44fc-9d62-e62a4d0bcf65")
+	)
 	(polyline
 		(pts
 			(xy 132.08 89.408) (xy 219.71 89.408)
@@ -1588,16 +1605,6 @@
 			(color 0 0 0 1)
 		)
 		(uuid "2cb02f2f-0f2d-477a-a93e-f152996e5d0c")
-	)
-	(wire
-		(pts
-			(xy 157.48 127) (xy 160.02 127)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "2f4a5499-cb65-43cc-8b65-d0301a9bc74c")
 	)
 	(wire
 		(pts
@@ -1621,6 +1628,26 @@
 	)
 	(wire
 		(pts
+			(xy 96.52 149.86) (xy 97.79 149.86)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "406c4c54-beea-4b93-813c-b4fbf09842b2")
+	)
+	(wire
+		(pts
+			(xy 97.79 156.21) (xy 97.79 149.86)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "54edee76-1199-4ee8-b902-c1472c21dfc0")
+	)
+	(wire
+		(pts
 			(xy 160.02 74.93) (xy 163.83 74.93)
 		)
 		(stroke
@@ -1638,6 +1665,16 @@
 			(type default)
 		)
 		(uuid "69e55d20-62c0-4b54-aea8-aa68e7f62f50")
+	)
+	(wire
+		(pts
+			(xy 100.33 156.21) (xy 97.79 156.21)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "78fae9da-e01f-440e-b637-c4c9e672856e")
 	)
 	(wire
 		(pts
@@ -1691,16 +1728,6 @@
 	)
 	(wire
 		(pts
-			(xy 160.02 81.28) (xy 163.83 81.28)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "caf1c5ff-b370-4323-8691-ac70479cdddf")
-	)
-	(wire
-		(pts
 			(xy 87.63 110.49) (xy 90.17 110.49)
 		)
 		(stroke
@@ -1731,16 +1758,6 @@
 	)
 	(wire
 		(pts
-			(xy 123.19 129.54) (xy 123.19 128.27)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "f446865b-0bcb-4601-b287-bbe5113543c8")
-	)
-	(wire
-		(pts
 			(xy 76.2 119.38) (xy 76.2 125.73)
 		)
 		(stroke
@@ -1751,7 +1768,7 @@
 	)
 	(rectangle
 		(start 62.23 92.71)
-		(end 129.54 138.43)
+		(end 129.54 162.56)
 		(stroke
 			(width 0)
 			(type default)
@@ -1787,44 +1804,6 @@
 			(type none)
 		)
 		(uuid 6fc6886a-b5ec-4a74-9c22-9246b31c5188)
-	)
-	(rectangle
-		(start 220.98 48.26)
-		(end 247.65 63.5)
-		(stroke
-			(width 0)
-			(type default)
-			(color 0 0 0 1)
-		)
-		(fill
-			(type none)
-		)
-		(uuid a933075c-f34c-4f38-948f-dcdff14e157a)
-	)
-	(text "added to avoid constant power drain"
-		(exclude_from_sim no)
-		(at 103.886 94.234 0)
-		(effects
-			(font
-				(size 0.889 0.889)
-				(color 0 0 0 1)
-			)
-			(justify left)
-		)
-		(uuid "1a630728-5747-46c2-8603-02a4bf133ec0")
-	)
-	(text "Bulk Decoupling"
-		(exclude_from_sim no)
-		(at 228.6 45.72 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-				(thickness 0.254)
-				(bold yes)
-				(color 0 0 0 1)
-			)
-		)
-		(uuid "252b8d59-be93-4b01-a1e1-80ad6463a699")
 	)
 	(text "Vf=2.6, R=4.7k, I=4.5mA"
 		(exclude_from_sim no)
@@ -1879,6 +1858,7 @@
 	)
 	(label "VSOL"
 		(at 157.48 107.95 180)
+		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1888,17 +1868,19 @@
 		(uuid "00687e79-57a9-4c34-a3ea-5b239208d3e9")
 	)
 	(label "VSOL"
-		(at 123.19 129.54 0)
+		(at 88.9 149.86 180)
+		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
-			(justify left bottom)
+			(justify right bottom)
 		)
-		(uuid "4afd9aec-bd2b-4872-9deb-62b8a20495f0")
+		(uuid "5bb7fe5a-092e-42fd-8347-749964e6e467")
 	)
 	(label "VSOL"
 		(at 106.68 60.96 0)
+		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1909,6 +1891,7 @@
 	)
 	(label "VSOL"
 		(at 106.68 76.2 0)
+		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1918,7 +1901,8 @@
 		(uuid "9f1414bb-2cbd-49c8-9aa6-76c182ef2062")
 	)
 	(label "VSOL"
-		(at 229.87 52.07 0)
+		(at 123.19 128.27 0)
+		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1929,6 +1913,7 @@
 	)
 	(label "VSOL"
 		(at 161.29 62.23 180)
+		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1981,6 +1966,28 @@
 			)
 		)
 	)
+	(global_label "VSOL_SENSE"
+		(shape output)
+		(at 100.33 156.21 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "51065583-8c64-47d5-91d0-f0dc6a9879f5")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 114.987 156.21 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+				(hide yes)
+			)
+		)
+	)
 	(global_label "SOL2_RET"
 		(shape input)
 		(at 91.44 60.96 180)
@@ -2003,7 +2010,7 @@
 			)
 		)
 	)
-	(global_label "VALVE2_CTRL"
+	(global_label "SOL2_EN"
 		(shape input)
 		(at 157.48 120.65 180)
 		(fields_autoplaced yes)
@@ -2015,7 +2022,7 @@
 		)
 		(uuid "9de45102-06f7-4e39-9e76-7e567ab775e9")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 142.3391 120.65 0)
+			(at 146.2701 120.65 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2047,7 +2054,7 @@
 			)
 		)
 	)
-	(global_label "VALVE1_CTRL"
+	(global_label "SOL1_EN"
 		(shape input)
 		(at 160.02 74.93 180)
 		(fields_autoplaced yes)
@@ -2059,7 +2066,7 @@
 		)
 		(uuid "cd16a075-fb14-4881-bdcd-5e63a5a325d5")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 144.8791 74.93 0)
+			(at 148.8101 74.93 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2069,7 +2076,7 @@
 			)
 		)
 	)
-	(global_label "VSOL-SW"
+	(global_label "VSOL_EN"
 		(shape input)
 		(at 97.79 110.49 0)
 		(fields_autoplaced yes)
@@ -2081,7 +2088,7 @@
 		)
 		(uuid "ffc52b6e-9863-4f69-8e53-1f521fc82663")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 109.6652 110.49 0)
+			(at 108.879 110.49 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2093,7 +2100,7 @@
 	)
 	(symbol
 		(lib_id "Device:C_Polarized")
-		(at 229.87 55.88 0)
+		(at 123.19 132.08 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -2101,7 +2108,7 @@
 		(dnp no)
 		(uuid "17a6b7e0-4873-4746-8f33-859fbdd2d72d")
 		(property "Reference" "C46"
-			(at 234.442 54.864 0)
+			(at 124.206 130.048 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2110,7 +2117,7 @@
 			)
 		)
 		(property "Value" "100uF"
-			(at 234.442 57.404 0)
+			(at 123.444 134.62 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2119,7 +2126,7 @@
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:CP_Elec_6.3x5.9"
-			(at 230.8352 59.69 0)
+			(at 124.1552 135.89 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2128,7 +2135,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 229.87 55.88 0)
+			(at 123.19 132.08 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2137,7 +2144,7 @@
 			)
 		)
 		(property "Description" "Polarized capacitor"
-			(at 229.87 55.88 0)
+			(at 123.19 132.08 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2146,7 +2153,7 @@
 			)
 		)
 		(property "Digikey" "732-8511-1-ND"
-			(at 229.87 55.88 0)
+			(at 123.19 132.08 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2154,8 +2161,17 @@
 				(hide yes)
 			)
 		)
-		(property "JLCPCB" ""
-			(at 229.87 55.88 0)
+		(property "Sim.Device" ""
+			(at 123.19 132.08 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Pins" ""
+			(at 123.19 132.08 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2179,72 +2195,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Connector:TestPoint")
-		(at 160.02 81.28 90)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(uuid "37a38e9e-ccb3-40ad-ac28-fa65b3c847d8")
-		(property "Reference" "TP11"
-			(at 150.368 82.55 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "VALVE1_OUT_TP"
-			(at 161.544 85.09 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
-			(at 160.02 76.2 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" "~"
-			(at 160.02 76.2 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "test point"
-			(at 160.02 81.28 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "53fbd91e-c026-4db3-ab2a-093394e098b1")
-		)
-		(instances
-			(project "lower_lc_board"
-				(path "/d63798c4-e363-437e-9012-e4aff32e6642/762489dd-fdf2-4f5c-8c0c-d0a6195d3f58"
-					(reference "TP11")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Device:R")
 		(at 102.87 76.2 90)
 		(unit 1)
@@ -2261,7 +2211,7 @@
 				)
 			)
 		)
-		(property "Value" "4.7k"
+		(property "Value" "12k"
 			(at 102.87 76.2 90)
 			(effects
 				(font
@@ -2269,7 +2219,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Resistor_SMD:R_1206_3216Metric_Pad1.30x1.75mm_HandSolder"
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
 			(at 102.87 77.978 90)
 			(effects
 				(font
@@ -2305,7 +2255,25 @@
 				(hide yes)
 			)
 		)
-		(property "JLCPCB" "C17936"
+		(property "Sim.Device" ""
+			(at 102.87 76.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Pins" ""
+			(at 102.87 76.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C22790"
 			(at 102.87 76.2 0)
 			(effects
 				(font
@@ -2383,7 +2351,25 @@
 				(hide yes)
 			)
 		)
-		(property "JLCPCB" "C25804"
+		(property "Sim.Device" ""
+			(at 71.12 119.38 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Pins" ""
+			(at 71.12 119.38 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C25804"
 			(at 71.12 119.38 0)
 			(effects
 				(font
@@ -2461,7 +2447,25 @@
 				(hide yes)
 			)
 		)
-		(property "JLCPCB" "C25804"
+		(property "Sim.Device" ""
+			(at 87.63 114.3 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Pins" ""
+			(at 87.63 114.3 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C25804"
 			(at 87.63 114.3 0)
 			(effects
 				(font
@@ -2539,7 +2543,25 @@
 				(hide yes)
 			)
 		)
-		(property "JLCPCB" "C8218"
+		(property "Sim.Device" ""
+			(at 93.98 110.49 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Pins" ""
+			(at 93.98 110.49 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C8218"
 			(at 93.98 110.49 0)
 			(effects
 				(font
@@ -2588,7 +2610,7 @@
 				)
 			)
 		)
-		(property "Footprint" "ul_SI2301CDS-T1-GE3:TO-236_VIS"
+		(property "Footprint" "Package_TO_SOT_SMD:SOT-23"
 			(at 82.55 125.73 0)
 			(effects
 				(font
@@ -2617,7 +2639,34 @@
 				(hide yes)
 			)
 		)
-		(property "Digikey" "C182476"
+		(property "Digikey" ""
+			(at 82.55 125.73 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 82.55 125.73 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Pins" ""
+			(at 82.55 125.73 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C182476"
 			(at 82.55 125.73 0)
 			(effects
 				(font
@@ -2728,8 +2777,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "4.7k"
-			(at 83.058 119.38 90)
+		(property "Value" "6.2k"
+			(at 83.566 119.38 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2764,7 +2813,25 @@
 				(hide yes)
 			)
 		)
-		(property "JLCPCB" "C23162"
+		(property "Sim.Device" ""
+			(at 81.28 119.38 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Pins" ""
+			(at 81.28 119.38 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C4260"
 			(at 81.28 119.38 0)
 			(effects
 				(font
@@ -2805,7 +2872,7 @@
 				)
 			)
 		)
-		(property "Value" "4.7k"
+		(property "Value" "12k"
 			(at 102.87 60.96 90)
 			(effects
 				(font
@@ -2813,7 +2880,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Resistor_SMD:R_1206_3216Metric_Pad1.30x1.75mm_HandSolder"
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
 			(at 102.87 62.738 90)
 			(effects
 				(font
@@ -2849,7 +2916,25 @@
 				(hide yes)
 			)
 		)
-		(property "JLCPCB" "C17936"
+		(property "Sim.Device" ""
+			(at 102.87 60.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Pins" ""
+			(at 102.87 60.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C22790"
 			(at 102.87 60.96 0)
 			(effects
 				(font
@@ -2868,6 +2953,84 @@
 			(project "lower_lc_board"
 				(path "/d63798c4-e363-437e-9012-e4aff32e6642/762489dd-fdf2-4f5c-8c0c-d0a6195d3f58"
 					(reference "R30")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 92.71 149.86 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "9613f820-92df-4089-9512-ad868e541013")
+		(property "Reference" "R47"
+			(at 96.52 147.32 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "100k"
+			(at 95.25 152.4 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
+			(at 92.71 151.638 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 92.71 149.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 92.71 149.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C25803"
+			(at 92.71 149.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "964c9af8-6cd7-4a62-ae2a-5886172029f2")
+		)
+		(pin "1"
+			(uuid "be2c114a-63a9-4a0d-a933-7be9b371910c")
+		)
+		(instances
+			(project "lower_lc_board"
+				(path "/d63798c4-e363-437e-9012-e4aff32e6642/762489dd-fdf2-4f5c-8c0c-d0a6195d3f58"
+					(reference "R47")
 					(unit 1)
 				)
 			)
@@ -2996,7 +3159,25 @@
 				(hide yes)
 			)
 		)
-		(property "JLCPCB" "C8545"
+		(property "Sim.Device" ""
+			(at 76.2 105.41 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Pins" ""
+			(at 76.2 105.41 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C8545"
 			(at 76.2 105.41 0)
 			(effects
 				(font
@@ -3018,6 +3199,72 @@
 			(project "lower_lc_board"
 				(path "/d63798c4-e363-437e-9012-e4aff32e6642/762489dd-fdf2-4f5c-8c0c-d0a6195d3f58"
 					(reference "Q5")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector:TestPoint")
+		(at 97.79 149.86 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(dnp no)
+		(uuid "b9d76220-ed29-49b4-866e-6a52a953ee80")
+		(property "Reference" "TP7"
+			(at 96.52 142.875 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "VSOL.S"
+			(at 94.615 144.78 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "TestPoint:TestPoint_Pad_1.5x1.5mm"
+			(at 102.87 149.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 102.87 149.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "GSE.S"
+			(at 97.79 149.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "9792ba63-885c-41ef-bfd4-5ca64c8802f0")
+		)
+		(instances
+			(project "lower_lc_board"
+				(path "/d63798c4-e363-437e-9012-e4aff32e6642/762489dd-fdf2-4f5c-8c0c-d0a6195d3f58"
+					(reference "TP7")
 					(unit 1)
 				)
 			)
@@ -3091,7 +3338,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 229.87 59.69 0)
+		(at 123.19 135.89 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -3099,7 +3346,7 @@
 		(dnp no)
 		(uuid "d32facfd-8cf8-4478-9f6e-02d59f177247")
 		(property "Reference" "#PWR075"
-			(at 229.87 66.04 0)
+			(at 123.19 142.24 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3108,7 +3355,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 226.314 61.722 0)
+			(at 119.634 137.922 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3116,7 +3363,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 229.87 59.69 0)
+			(at 123.19 135.89 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3125,7 +3372,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 229.87 59.69 0)
+			(at 123.19 135.89 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3134,7 +3381,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 229.87 59.69 0)
+			(at 123.19 135.89 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3215,7 +3462,16 @@
 				(hide yes)
 			)
 		)
-		(property "JLCPCB" "C2290"
+		(property "Sim.Device" ""
+			(at 95.25 76.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Pins" ""
 			(at 95.25 76.2 0)
 			(effects
 				(font
@@ -3234,6 +3490,149 @@
 			(project "lower_lc_board"
 				(path "/d63798c4-e363-437e-9012-e4aff32e6642/762489dd-fdf2-4f5c-8c0c-d0a6195d3f58"
 					(reference "D12")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 106.68 149.86 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "e105f3be-1403-4981-8e10-df3eafff6856")
+		(property "Reference" "#PWR030"
+			(at 113.03 149.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 109.855 149.86 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 106.68 149.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 106.68 149.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 106.68 149.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "0c38e42e-bb2f-4952-bd4c-f65096422aeb")
+		)
+		(instances
+			(project "lower_lc_board"
+				(path "/d63798c4-e363-437e-9012-e4aff32e6642/762489dd-fdf2-4f5c-8c0c-d0a6195d3f58"
+					(reference "#PWR030")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 102.87 149.86 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "e761dae4-2b12-4cd2-9a64-4649253ca5f7")
+		(property "Reference" "R54"
+			(at 102.235 153.67 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "10k"
+			(at 102.235 151.8808 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
+			(at 102.87 148.082 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 102.87 149.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 102.87 149.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C25804"
+			(at 102.87 149.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "e569e080-58d0-4743-999b-1122fcc3b68c")
+		)
+		(pin "2"
+			(uuid "e4b1c899-cb7c-4de8-821f-66e847a99ab4")
+		)
+		(instances
+			(project "lower_lc_board"
+				(path "/d63798c4-e363-437e-9012-e4aff32e6642/762489dd-fdf2-4f5c-8c0c-d0a6195d3f58"
+					(reference "R54")
 					(unit 1)
 				)
 			)
@@ -3305,72 +3704,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Connector:TestPoint")
-		(at 157.48 127 90)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(uuid "e979651d-29a5-4101-9511-34338a243d8f")
-		(property "Reference" "TP12"
-			(at 147.574 128.27 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "VALVE2_OUT_TP"
-			(at 158.75 131.064 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
-			(at 157.48 121.92 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" "~"
-			(at 157.48 121.92 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "test point"
-			(at 157.48 127 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "041c4218-074a-4a42-b302-ff1dbb7f326f")
-		)
-		(instances
-			(project "lower_lc_board"
-				(path "/d63798c4-e363-437e-9012-e4aff32e6642/762489dd-fdf2-4f5c-8c0c-d0a6195d3f58"
-					(reference "TP12")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Device:LED")
 		(at 95.25 60.96 0)
 		(unit 1)
@@ -3431,7 +3764,16 @@
 				(hide yes)
 			)
 		)
-		(property "JLCPCB" "C2290"
+		(property "Sim.Device" ""
+			(at 95.25 60.96 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Pins" ""
 			(at 95.25 60.96 0)
 			(effects
 				(font
@@ -3457,7 +3799,7 @@
 	)
 	(sheet
 		(at 163.83 55.88)
-		(size 39.624 27.178)
+		(size 16.51 22.86)
 		(fields_autoplaced yes)
 		(stroke
 			(width 0.1524)
@@ -3477,7 +3819,7 @@
 			)
 		)
 		(property "Sheetfile" "../shared_schematics/VALVE_control.kicad_sch"
-			(at 163.83 83.6426 0)
+			(at 163.83 79.3246 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3494,16 +3836,6 @@
 				(justify left)
 			)
 			(uuid "9914ec61-b53b-4712-8751-b4937c298047")
-		)
-		(pin "TP" input
-			(at 163.83 81.28 180)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-			(uuid "01df0c7e-c231-4847-b213-fd41dc43242a")
 		)
 		(pin "CONTROL" input
 			(at 163.83 74.93 180)
@@ -3535,7 +3867,7 @@
 	)
 	(sheet
 		(at 160.02 101.6)
-		(size 39.624 28.194)
+		(size 15.24 24.13)
 		(fields_autoplaced yes)
 		(stroke
 			(width 0.1524)
@@ -3555,7 +3887,7 @@
 			)
 		)
 		(property "Sheetfile" "../shared_schematics/VALVE_control.kicad_sch"
-			(at 160.02 130.3786 0)
+			(at 160.02 126.3146 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3572,16 +3904,6 @@
 				(justify left)
 			)
 			(uuid "a8ad6b3e-ab3e-424c-945b-353c63b6c44c")
-		)
-		(pin "TP" input
-			(at 160.02 127 180)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-			(uuid "562d0358-a2af-4847-aaf8-44664dd16ea5")
 		)
 		(pin "CONTROL" input
 			(at 160.02 120.65 180)

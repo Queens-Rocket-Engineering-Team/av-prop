@@ -1,0 +1,23 @@
+{
+  "name": "ADS131M04",
+  "version": "0.0.1",
+  "description": "Arduino library for interfacing with the ADS131M04 ADC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Queens-Rocket-Engineering-Team/av-prop.git"
+  },
+  "authors": [
+    {
+      "name": "QRET",
+      "maintainer": true
+    }
+  ],
+  "frameworks": "arduino",
+  "platforms": ["ststm32", "espressif32"],
+  "dependencies": [
+    {
+      "name": "SPI",
+      "version": "*"
+    }
+  ]
+}

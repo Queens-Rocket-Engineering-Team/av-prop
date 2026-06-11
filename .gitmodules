@@ -1,0 +1,7 @@
+[submodule "Firmware/ctl-qlcp-lib"]
+	path = Firmware/ctl-qlcp-lib
+	url = https://github.com/Queens-Rocket-Engineering-Team/ctl-qlcp-lib.git
+[submodule "Firmware/av-libraries"]
+	path = Firmware/av-libraries
+	url = https://github.com/Queens-Rocket-Engineering-Team/av-libraries.git
+	branch = stable-v0.5.x
