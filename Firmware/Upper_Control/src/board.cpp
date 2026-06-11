@@ -21,8 +21,8 @@ float g_hallEffect[3]     = {0.0f, 0.0f, 0.0f};
 float g_24VoltageSense[2] = {0.0f, 0.0f};
 float g_thermocouple      = 0.0f;
 
-static ADS131M04 s_adc(-1, ADC_DRDY_PIN, &SPI);
-static TMAG5273 s_hall(HALL_I2C_ADDR, &Wire);
+static ADS131M04 s_adc(-1, kAdcDrdyPin, &SPI);
+static TMAG5273 s_hall(kHallI2cAddr, &Wire);
 
 constexpr uint8_t kAdcClockChannel = 0U;
 constexpr uint32_t kAdcClockHz = 8192000U;
@@ -72,8 +72,8 @@ constexpr BoardSensorMapping kLocalPtSensors[] = {
 };
 
 constexpr BoardControlMapping kLocalValveControls[] = {
-    {BOARD_ENDPOINT_VALVE1, SOL1_EN_PIN, false},
-    {BOARD_ENDPOINT_VALVE2, SOL2_EN_PIN, false},
+    {BOARD_ENDPOINT_VALVE1, kSol1EnPin, false},
+    {BOARD_ENDPOINT_VALVE2, kSol2EnPin, false},
 };
 
 constexpr char kBoardQlcpConfigJson[] = R"json({
@@ -213,29 +213,29 @@ static uint32_t     s_lastStreamTxMs = 0U;
 constexpr uint8_t kQlcpControlCount = 5U;
 constexpr uint8_t kQlcpSensorCount  = 7U;
 
-static void s_fillHeader(qlcp_header& header) {
+static void fillHeader(qlcp_header& header) {
   header.sequence = static_cast<uint8_t>(s_sequence++);
   header.timestamp = s_tsOffset + millis();
 }
 
-static void s_netTransition(QlcpNetState next, uint32_t nowMs) {
+static void netTransition(QlcpNetState next, uint32_t nowMs) {
   LOG_INFO("QLCP net: %u -> %u", s_netState, next);
   s_netState = next;
   s_stateEnteredMs = nowMs;
 }
 
 // Any link fault: close everything and retry after the (doubling) backoff.
-static void s_netFail(uint32_t nowMs) {
+static void netFail(uint32_t nowMs) {
   net_link_close_all(&s_netLink);
   s_streamFrequencyHz = 0U;
   s_configSent = false;
-  s_netTransition(QLCP_NET_BACKOFF, nowMs);
+  netTransition(QLCP_NET_BACKOFF, nowMs);
 }
 
-static void s_qlcpNetService(uint32_t nowMs);
-static void s_qlcpTelemetryService(uint32_t nowMs);
+static void qlcpNetService(uint32_t nowMs);
+static void qlcpTelemetryService(uint32_t nowMs);
 
-static bool s_setValveByIndex(uint8_t index, bool open) {
+static bool setValveByIndex(uint8_t index, bool open) {
   if (index < 2U) {
     digitalWrite(static_cast<int>(kLocalValveControls[index].pin), open ? HIGH : LOW);
     g_valveStates[index] = open;
@@ -256,7 +256,7 @@ static bool s_setValveByIndex(uint8_t index, bool open) {
 #endif
   }
   if (index == 4U) {
-    digitalWrite(VPT_EN_PIN, open ? HIGH : LOW);
+    digitalWrite(kVptEnPin, open ? HIGH : LOW);
     g_24VoltageFet[0] = open;
     return true;
   }
@@ -264,7 +264,7 @@ static bool s_setValveByIndex(uint8_t index, bool open) {
 }
 
 #ifndef MOCK_HARDWARE
-float s_processPressurePsi(float voltagePt) {
+static float processPressurePsi(float voltagePt) {
   AIM_ASSERT(voltagePt >= 0.0f && voltagePt <= 5.0f);
 
   const float currentMa = (voltagePt / kPtShuntResistanceOhms) * 1000.0f;
@@ -276,10 +276,10 @@ float s_processPressurePsi(float voltagePt) {
 #endif
 
 
-static void s_sendAck(uint8_t ackType, uint16_t ackSeq) {
+static void sendAck(uint8_t ackType, uint16_t ackSeq) {
   qlcp_server_payload out = {};
   out.packet_type = QLCP_PT_ACK;
-  s_fillHeader(out.payload_data.ack.header);
+  fillHeader(out.payload_data.ack.header);
   out.payload_data.ack.ack_packet_type = ackType;
   out.payload_data.ack.ack_sequence = ackSeq;
   if (tcp_tx_payload(&s_netLink, &out) != 0) {
@@ -287,10 +287,10 @@ static void s_sendAck(uint8_t ackType, uint16_t ackSeq) {
   }
 }
 
-static void s_sendNack(uint8_t nackType, uint16_t nackSeq, uint8_t errCode) {
+static void sendNack(uint8_t nackType, uint16_t nackSeq, uint8_t errCode) {
   qlcp_server_payload out = {};
   out.packet_type = QLCP_PT_NACK;
-  s_fillHeader(out.payload_data.nack.header);
+  fillHeader(out.payload_data.nack.header);
   out.payload_data.nack.nack_packet_type = nackType;
   out.payload_data.nack.nack_sequence = nackSeq;
   out.payload_data.nack.nack_error_code = errCode;
@@ -302,14 +302,14 @@ static void s_sendNack(uint8_t nackType, uint16_t nackSeq, uint8_t errCode) {
 bool boardInitHardware(void) {
   AIM_ASSERT(!s_boardHardwareReady);
 
-  const int indicatorLeds[] = {WIFI_LED_PIN, CAN_LED_PIN, DEBUG_LED_PIN};
+  const int indicatorLeds[] = {kWifiLedPin, kCanLedPin, kDebugLedPin};
   for (size_t i = 0; i < (sizeof(indicatorLeds) / sizeof(indicatorLeds[0])); i++) {
     pinMode(indicatorLeds[i], OUTPUT);
     digitalWrite(indicatorLeds[i], LOW);
   }
 
-  pinMode(VPT_EN_PIN, OUTPUT);
-  digitalWrite(VPT_EN_PIN, LOW);
+  pinMode(kVptEnPin, OUTPUT);
+  digitalWrite(kVptEnPin, LOW);
 
   for (size_t i = 0; i < (sizeof(kLocalValveControls) / sizeof(kLocalValveControls[0])); i++) {
     pinMode(static_cast<int>(kLocalValveControls[i].pin), OUTPUT);
@@ -319,17 +319,17 @@ bool boardInitHardware(void) {
   }
 
   ledcSetup(kAdcClockChannel, kAdcClockHz, kAdcClockDuty);
-  ledcAttachPin(ADC_CLKIN_PIN, kAdcClockChannel);
+  ledcAttachPin(kAdcClkinPin, kAdcClockChannel);
   ledcWrite(kAdcClockChannel, 1U);
 
 #ifndef MOCK_HARDWARE
-  SPI.begin(ADC_SCLK_PIN, ADC_MISO_PIN, ADC_MOSI_PIN, -1);
+  SPI.begin(kAdcSclkPin, kAdcMisoPin, kAdcMosiPin, -1);
   s_adc.init();
-  Wire.begin(HALL_SDA_PIN, HALL_SCL_PIN);
+  Wire.begin(kHallSdaPin, kHallSclPin);
   s_hall.init();
 #endif
 
-  digitalWrite(VPT_EN_PIN, HIGH);
+  digitalWrite(kVptEnPin, HIGH);
   g_24VoltageFet[0] = true;
   s_boardHardwareReady = true;
   LOG_INFO("Board hardware initialized");
@@ -351,10 +351,10 @@ void boardServiceTx(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& 
       case DEBUG_CONSOLE: r = 255; g = 191; break; // Amber
       default:            b = 255; break;
     }
-    neopixelWrite(RGB_DATA_PIN, r, g, b);
+    neopixelWrite(kRgbDataPin, r, g, b);
 
     if (boardState == LOW_POWER || boardState == FAULT) {
-      (void)s_setValveByIndex(4U, false);
+      (void)setValveByIndex(4U, false);
     }
   }
 
@@ -377,7 +377,7 @@ void boardServiceTx(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& 
       s_adc.computeVoltages(rawData, volts);
       for (size_t i = 0; i < (sizeof(kLocalPtSensors) / sizeof(kLocalPtSensors[0])); i++) {
         const uint8_t channel = kLocalPtSensors[i].adcChannel;
-        g_ptValues[i] = s_processPressurePsi(volts[channel]);
+        g_ptValues[i] = processPressurePsi(volts[channel]);
       }
     } else {
       LOG_WARN("ADC sample timeout");
@@ -527,22 +527,22 @@ void boardUpdate(uint32_t schedulerNowMs) {
   AIM_ASSERT(s_boardHardwareReady);
   // Network/QLCP services run every tick — including in DEBUG_CONSOLE — so
   // server heartbeat ACKs continue while an operator is in the console.
-  s_qlcpNetService(schedulerNowMs);
-  s_qlcpTelemetryService(schedulerNowMs);
+  qlcpNetService(schedulerNowMs);
+  qlcpTelemetryService(schedulerNowMs);
 }
 
-static void s_qlcpHandlePacket(const qlcp_client_payload& in) {
+static void qlcpHandlePacket(const qlcp_client_payload& in) {
   switch (in.packet_type) {
     case QLCP_PT_TIMESYNC: {
       const uint32_t serverTime = in.payload_data.header_only.timestamp;
       s_tsOffset = serverTime - millis();
       LOG_INFO("QLCP timesync completed. Offset: %u ms", s_tsOffset);
-      s_sendAck(QLCP_PT_TIMESYNC, in.payload_data.header_only.sequence);
+      sendAck(QLCP_PT_TIMESYNC, in.payload_data.header_only.sequence);
       break;
     }
 
     case QLCP_PT_HEARTBEAT: {
-      s_sendAck(QLCP_PT_HEARTBEAT, in.payload_data.header_only.sequence);
+      sendAck(QLCP_PT_HEARTBEAT, in.payload_data.header_only.sequence);
       break;
     }
 
@@ -553,14 +553,14 @@ static void s_qlcpHandlePacket(const qlcp_client_payload& in) {
         s_lastStreamTxMs = millis();
         LOG_INFO("QLCP Stream Start at %u Hz", freq);
       }
-      s_sendAck(QLCP_PT_STREAM_START, in.payload_data.header_only.sequence);
+      sendAck(QLCP_PT_STREAM_START, in.payload_data.header_only.sequence);
       break;
     }
 
     case QLCP_PT_STREAM_STOP: {
       s_streamFrequencyHz = 0U;
       LOG_INFO("QLCP Stream Stop");
-      s_sendAck(QLCP_PT_STREAM_STOP, in.payload_data.header_only.sequence);
+      sendAck(QLCP_PT_STREAM_STOP, in.payload_data.header_only.sequence);
       break;
     }
 
@@ -568,10 +568,10 @@ static void s_qlcpHandlePacket(const qlcp_client_payload& in) {
       const uint8_t cmdId = in.payload_data.control.command_id;
       const bool open = (in.payload_data.control.command_state == QLCP_CS_OPEN);
       LOG_INFO("Received control cmdId=%u state=%u", cmdId, in.payload_data.control.command_state);
-      if (s_setValveByIndex(cmdId, open)) {
-        s_sendAck(QLCP_PT_CONTROL, in.payload_data.header_only.sequence);
+      if (setValveByIndex(cmdId, open)) {
+        sendAck(QLCP_PT_CONTROL, in.payload_data.header_only.sequence);
       } else {
-        s_sendNack(QLCP_PT_CONTROL, in.payload_data.header_only.sequence, QLCP_ERR_HARDWARE_FAULT);
+        sendNack(QLCP_PT_CONTROL, in.payload_data.header_only.sequence, QLCP_ERR_HARDWARE_FAULT);
       }
       break;
     }
@@ -590,7 +590,7 @@ static void s_qlcpHandlePacket(const qlcp_client_payload& in) {
 
       qlcp_server_payload out = {};
       out.packet_type = QLCP_PT_STATUS;
-      s_fillHeader(out.payload_data.status.header);
+      fillHeader(out.payload_data.status.header);
       out.payload_data.status.control_data = controlData;
       out.payload_data.status.control_count = kQlcpControlCount;
       out.payload_data.status.device_status = QLCP_DS_ACTIVE;
@@ -608,7 +608,7 @@ static void s_qlcpHandlePacket(const qlcp_client_payload& in) {
 
 // Worst-case tick: one zero-timeout select/getsockopt, <=512 B RX copy plus
 // one decode, <=1 KB TX send copy — single-digit ms against the 2 s task WDT.
-static void s_qlcpNetService(uint32_t nowMs) {
+static void qlcpNetService(uint32_t nowMs) {
   switch (s_netState) {
     case QLCP_NET_IDLE:
       break;
@@ -616,7 +616,7 @@ static void s_qlcpNetService(uint32_t nowMs) {
     case QLCP_NET_WIFI_START:
       LOG_INFO("WiFi Connecting to SSID: %s", WIFI_SSID);
       WiFi.begin(WIFI_SSID, WIFI_PASS);
-      s_netTransition(QLCP_NET_WIFI_WAIT, nowMs);
+      netTransition(QLCP_NET_WIFI_WAIT, nowMs);
       break;
 
     case QLCP_NET_WIFI_WAIT:
@@ -624,32 +624,32 @@ static void s_qlcpNetService(uint32_t nowMs) {
         LOG_INFO("WiFi Connected! IP: %s", WiFi.localIP().toString().c_str());
         s_netLink.netif_handle = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
         if (ssdp_listen_begin(&s_netLink) == ESP_OK) {
-          s_netTransition(QLCP_NET_DISCOVER, nowMs);
+          netTransition(QLCP_NET_DISCOVER, nowMs);
         } else {
-          s_netFail(nowMs);
+          netFail(nowMs);
         }
       } else if ((nowMs - s_stateEnteredMs) >= kNetWifiWaitTimeoutMs) {
         LOG_WARN("WiFi connect timeout — retrying");
         WiFi.disconnect();
-        s_netTransition(QLCP_NET_WIFI_START, nowMs);
+        netTransition(QLCP_NET_WIFI_START, nowMs);
       }
       break;
 
     case QLCP_NET_DISCOVER: {
       if (WiFi.status() != WL_CONNECTED) {
-        s_netFail(nowMs);
+        netFail(nowMs);
         break;
       }
       const int found = ssdp_listen_service(&s_netLink);
       if (found == 1) {
         ssdp_listen_end(&s_netLink);
         if (tcp_connect_begin(&s_netLink) == ESP_OK) {
-          s_netTransition(QLCP_NET_TCP_CONNECT, nowMs);
+          netTransition(QLCP_NET_TCP_CONNECT, nowMs);
         } else {
-          s_netFail(nowMs);
+          netFail(nowMs);
         }
       } else if (found < 0) {
-        s_netFail(nowMs);
+        netFail(nowMs);
       }
       break;
     }
@@ -658,29 +658,29 @@ static void s_qlcpNetService(uint32_t nowMs) {
       const int conn = tcp_connect_service(&s_netLink);
       if (conn == 1) {
         if (udp_create_socket(&s_netLink) != ESP_OK) {
-          s_netFail(nowMs);
+          netFail(nowMs);
           break;
         }
         s_configSent = false;
         s_lastRxMs = nowMs;
         s_backoffMs = kNetBackoffMinMs;
-        s_netTransition(QLCP_NET_CONNECTED, nowMs);
+        netTransition(QLCP_NET_CONNECTED, nowMs);
       } else if ((conn < 0) || ((nowMs - s_stateEnteredMs) >= kNetTcpConnectTimeoutMs)) {
-        s_netFail(nowMs);
+        netFail(nowMs);
       }
       break;
     }
 
     case QLCP_NET_CONNECTED: {
       if (WiFi.status() != WL_CONNECTED) {
-        s_netFail(nowMs);
+        netFail(nowMs);
         break;
       }
 
       if (!s_configSent) {
         qlcp_server_payload out = {};
         out.packet_type = QLCP_PT_CONFIG;
-        s_fillHeader(out.payload_data.config.header);
+        fillHeader(out.payload_data.config.header);
         out.payload_data.config.config_data = kBoardQlcpConfigJson;
         out.payload_data.config.config_data_len = sizeof(kBoardQlcpConfigJson) - 1U;
         if (tcp_tx_payload(&s_netLink, &out) == 0) {
@@ -690,24 +690,24 @@ static void s_qlcpNetService(uint32_t nowMs) {
       }
 
       if (tcp_tx_service(&s_netLink) < 0) {
-        s_netFail(nowMs);
+        netFail(nowMs);
         break;
       }
 
       qlcp_client_payload in = {};
       const int rx = tcp_rx_service(&s_netLink, &in);
       if (rx < 0) {
-        s_netFail(nowMs);
+        netFail(nowMs);
         break;
       }
       if (rx == 1) {
         s_lastRxMs = nowMs;
-        s_qlcpHandlePacket(in);
+        qlcpHandlePacket(in);
       }
 
       if ((nowMs - s_lastRxMs) >= kNetRxIdleTimeoutMs) {
         LOG_WARN("QLCP server silent — reconnecting");
-        s_netFail(nowMs);
+        netFail(nowMs);
       }
       break;
     }
@@ -716,11 +716,11 @@ static void s_qlcpNetService(uint32_t nowMs) {
       if ((nowMs - s_stateEnteredMs) >= s_backoffMs) {
         s_backoffMs = (s_backoffMs >= (kNetBackoffMaxMs / 2U)) ? kNetBackoffMaxMs : (s_backoffMs * 2U);
         if (WiFi.status() != WL_CONNECTED) {
-          s_netTransition(QLCP_NET_WIFI_START, nowMs);
+          netTransition(QLCP_NET_WIFI_START, nowMs);
         } else if (ssdp_listen_begin(&s_netLink) == ESP_OK) {
-          s_netTransition(QLCP_NET_DISCOVER, nowMs);
+          netTransition(QLCP_NET_DISCOVER, nowMs);
         } else {
-          s_netFail(nowMs);  // back to BACKOFF with a longer delay
+          netFail(nowMs);  // back to BACKOFF with a longer delay
         }
       }
       break;
@@ -731,7 +731,7 @@ static void s_qlcpNetService(uint32_t nowMs) {
   }
 }
 
-static void s_qlcpTelemetryService(uint32_t nowMs) {
+static void qlcpTelemetryService(uint32_t nowMs) {
   if ((s_netState != QLCP_NET_CONNECTED) || (s_streamFrequencyHz == 0U)) {
     return;
   }
@@ -754,7 +754,7 @@ static void s_qlcpTelemetryService(uint32_t nowMs) {
   }
 
   qlcp_data_packet pkt = {};
-  s_fillHeader(pkt.header);
+  fillHeader(pkt.header);
   pkt.sensor_data = readings;
   pkt.sensor_count = kQlcpSensorCount;
 
@@ -763,7 +763,7 @@ static void s_qlcpTelemetryService(uint32_t nowMs) {
 
 void boardStartNetwork(void) {
   net_link_init(&s_netLink);
-  s_netTransition(QLCP_NET_WIFI_START, millis());
+  netTransition(QLCP_NET_WIFI_START, millis());
 }
 
 #ifndef FLIGHT_BUILD
@@ -779,7 +779,7 @@ void boardPrintNetworkStatus(Print& out) {
 bool boardSetValveStateDirect(uint8_t index, bool open) {
   if (index >= 5U) { return false; }
   LOG_DEBUG("Direct console actuator override index=%u open=%d", index, open);
-  return s_setValveByIndex(index, open);
+  return setValveByIndex(index, open);
 }
 
 #endif

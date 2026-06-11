@@ -11,31 +11,32 @@
 #include <AimNodeConfig.h>
 
 // Pin Definitions
-constexpr uint8_t CAN_TX_PIN = 1;
-constexpr uint8_t CAN_RX_PIN = 2;
-constexpr uint8_t SENSE_24V_PIN = 7;
-constexpr uint8_t SOL1_EN_PIN = 9;
-constexpr uint8_t SOL2_EN_PIN = 10;
-constexpr uint8_t VPT_EN_PIN = 47;
+constexpr uint8_t kCanTxPin = 1;
+constexpr uint8_t kCanRxPin = 2;
+constexpr uint8_t kSense24vPin = 7;
+constexpr uint8_t kSol1EnPin = 9;
+constexpr uint8_t kSol2EnPin = 10;
+constexpr uint8_t kVptEnPin = 47;
 
 // ADC SPI
-constexpr uint8_t ADC_CLKIN_PIN = 11;
-constexpr uint8_t ADC_MOSI_PIN = 12;
-constexpr uint8_t ADC_MISO_PIN = 13;
-constexpr uint8_t ADC_SCLK_PIN = 14;
-constexpr uint8_t ADC_DRDY_PIN = 19;
+constexpr uint8_t kAdcClkinPin = 11;
+constexpr uint8_t kAdcMosiPin = 12;
+constexpr uint8_t kAdcMisoPin = 13;
+constexpr uint8_t kAdcSclkPin = 14;
+constexpr uint8_t kAdcDrdyPin = 19;
 
 // HALL I2C
-constexpr uint8_t HALL_SCL_PIN = 17;
-constexpr uint8_t HALL_SDA_PIN = 18;
+constexpr uint8_t kHallSclPin = 17;
+constexpr uint8_t kHallSdaPin = 18;
+constexpr uint8_t kHallI2cAddr = 0x35U;
 
 // LEDs
-constexpr uint8_t WIFI_LED_PIN = 35;
-constexpr uint8_t CAN_LED_PIN = 36;
-constexpr uint8_t DEBUG_LED_PIN = 37;
+constexpr uint8_t kWifiLedPin = 35;
+constexpr uint8_t kCanLedPin = 36;
+constexpr uint8_t kDebugLedPin = 37;
 
-constexpr uint8_t BUZZ_EN_PIN = 41;
-constexpr uint8_t RGB_DATA_PIN = 42;
+constexpr uint8_t kBuzzEnPin = 41;
+constexpr uint8_t kRgbDataPin = 42;
 
 // board Identity & Configuration
 #define BOARD_ORIGIN aim::Node::UProp
@@ -91,15 +92,36 @@ extern float g_24VoltageSense[2];
 
 static constexpr uint8_t BOARD_ENDPOINT_LOWER_BASE = 8U;
 
+/**
+ * Hydra (Lower) -> Upper Wire Contract
+ * -----------------------------------
+ * All packets from Hydra use endpoint IDs >= BOARD_ENDPOINT_LOWER_BASE (8).
+ * IDs 0-3 in the lower space map to wire IDs 8-11.
+ * 
+ * | Wire EP | PacketType | Payload          | Sink                 |
+ * |---------|------------|------------------|----------------------|
+ * | 9       | Sensor     | float °C (TC)    | g_thermocouple       |
+ * | 10/11   | Sensor     | float PSI        | g_ptValues[2/3]      |
+ * | 10/11   | Valve      | 0/1 echo         | g_valveStates[2/3]   |
+ * | 12      | Sensor     | float V (VSOL)   | g_24VoltageSense[1]  |
+ * | 12      | Valve      | 0/1 VSOL FET     | g_24VoltageFet[2]    |
+ * | 13      | Valve      | 0/1 VPT FET      | g_24VoltageFet[1]    |
+ * | 16/17   | Sensor     | float (Hall)     | g_hallEffect[1/2]    |
+ * 
+ * Sensor endpoints sent every 100 ms. 
+ * Valve state on change + echo on command receipt.
+ */
 enum BoardEndpointId : uint8_t {
   BOARD_ENDPOINT_SYSTEM = 0U,
-  BOARD_ENDPOINT_TC = 1U,
-  BOARD_ENDPOINT_PT1 = 2U,
-  BOARD_ENDPOINT_PT2 = 3U,
-  BOARD_ENDPOINT_V_SOL = 4U, 
-  BOARD_ENDPOINT_V_PT = 5U, 
+  BOARD_ENDPOINT_TC     = 1U,
+  BOARD_ENDPOINT_PT1    = 2U,
+  BOARD_ENDPOINT_PT2    = 3U,
+  BOARD_ENDPOINT_V_SOL  = 4U, 
+  BOARD_ENDPOINT_V_PT   = 5U, 
   BOARD_ENDPOINT_VALVE1 = 6U,
-  BOARD_ENDPOINT_VALVE2 = 7U
+  BOARD_ENDPOINT_VALVE2 = 7U,
+  BOARD_ENDPOINT_HALL1  = 8U,  // wire endpoint 16 (LOWER_BASE + 8)
+  BOARD_ENDPOINT_HALL2  = 9U   // wire endpoint 17
 };
 
 enum BoardState : uint8_t {
