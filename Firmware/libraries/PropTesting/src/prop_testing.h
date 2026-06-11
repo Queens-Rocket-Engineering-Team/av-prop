@@ -14,7 +14,7 @@
 #include <Arduino.h>
 #include <ADS131M04.h>
 #include <SPI.h>
-#include <SparkFun_TMAG5273_Arduino_Library.h>
+#include <TMAG5273.h>
 #include <Wire.h>
 #include <SoftwareSerial.h>
 

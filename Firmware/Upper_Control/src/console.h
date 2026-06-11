@@ -6,29 +6,30 @@
 #include <Arduino.h>
 #include <cstdint>
 
-class AimNetwork;
+class AimCanDriver;
 class Logger;
+class AimFileSystem;
+class AimFlightRecorder;
+class AimNodeConfig;
+struct AimNodeCfg;
 
 enum ConsoleAction : uint8_t {
   CONSOLE_ACTION_NONE        = 0U,
   CONSOLE_ACTION_ENTER       = 1U,
-  CONSOLE_ACTION_EXIT        = 2U,
-  CONSOLE_ACTION_FLASH_INFO  = 3U,
-  CONSOLE_ACTION_FLASH_DUMP  = 4U,
-  CONSOLE_ACTION_FLASH_ERASE = 5U,
-  CONSOLE_ACTION_SHOW_NET    = 6U,
-  CONSOLE_ACTION_SHOW_CAN    = 7U,
-  CONSOLE_ACTION_SHOW_IO     = 8U
+  CONSOLE_ACTION_EXIT        = 2U
   // add more console actions here as needed
 };
 
-void consoleInit(Stream& serial,
-                 AimNetwork& aim,
-                 Logger& log);
+bool consoleInit(Stream& serial,
+                 AimCanDriver& canDriver,
+                 Logger& log,
+                 AimFileSystem& fs,
+                 AimFlightRecorder& recorder,
+                 AimNodeCfg& boardConfig,
+                 AimNodeConfig& nodeCfg);
 
 ConsoleAction consoleCheckEntry(void);
 ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs);
-void consoleResume(void);
 
 #endif // FLIGHT_BUILD
 

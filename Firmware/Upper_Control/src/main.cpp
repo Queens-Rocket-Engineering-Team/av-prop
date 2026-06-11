@@ -1,33 +1,54 @@
-#include "node.h"
+#include "board.h"
 #include "console.h"
 
+#include <cstring>
+#include <WiFi.h>
 #include <esp_idf_version.h>
 #include <esp_task_wdt.h>
 #include <logger.h>
+#include <AimFileSystem.h>
+#include <AimFlightRecorder.h>
+#include <AimConfigStore.h>
 
 static constexpr uint32_t kWatchdogTimeoutMs = 2000U;
 static constexpr uint8_t kMaxRxFramesPerLoop = 8U;
+static constexpr uint32_t kLogIntervalMs = 100U;
 
-struct NodeSchedulerState {
-  NodeState value = INIT;
-  uint32_t lastHeartbeatTxMs = 0U;
+struct BoardSchedulerState {
+  BoardState value = INIT;
+  uint32_t lastLogMs = 0U;
 };
 
-static AimCanDriver g_canHw(NODE_ORIGIN, NODE_CAN_BAUD, CAN_RX_PIN, CAN_TX_PIN);
-static AimNetwork g_aim(&g_canHw, NODE_ORIGIN);
+BoardConfig g_boardConfig = {BOARD_NAME, static_cast<uint8_t>(BOARD_ORIGIN)};
+static ESP32PartitionDriver g_flashHw("storage");
+static AimFileSystem g_fs(&g_flashHw);
 
-static NodeSchedulerState g_schedulerState = {};
+// Storage partition: 384 blocks × 4096 B = 1,572,864 B (partitions.csv).
+// Steady state holds log.bak + log.bin, so each file may be at most
+// (partition − metadata reserve) / 2. Peak usage ≈ 1.2 MB, ~376 KB headroom.
+static constexpr uint32_t kStoragePartitionBytes = 384U * 4096U;
+static constexpr uint32_t kLfsMetadataReserve    = 320U * 1024U;
+static constexpr uint32_t kMaxLogSize = (kStoragePartitionBytes - kLfsMetadataReserve) / 2U;
+
+static AimFlightRecorder g_flightRecorder(g_fs, BOARD_LOG_COL_COUNT, 100, kMaxLogSize);
+static AimConfigStore g_configStore(g_fs);
+
+static AimNodeConfig g_nodeCfg(g_configStore, g_fs);
+static AimCanDriver g_canHw(BOARD_CAN_BAUD, CAN_RX_PIN, CAN_TX_PIN);
+static AimNetwork g_aim(&g_canHw, BOARD_ORIGIN);
+
+static BoardSchedulerState g_schedulerState = {};
 static bool g_watchdogReady = false;
-static Logger g_log(Serial, NODE_ORIGIN, LogLevel::INFO);
+static Logger g_log(Serial, static_cast<uint8_t>(BOARD_ORIGIN), LogLevel::INFO);
 
-void transitionTo(NodeState nextState) {
+static void transitionTo(BoardState nextState) {
   AIM_ASSERT(nextState <= FAULT);
   AIM_ASSERT(nextState != g_schedulerState.value);
   LOG_INFO("State transition from %d to %d", static_cast<int>(g_schedulerState.value), static_cast<int>(nextState));
   g_schedulerState.value = nextState;
 }
 
-void initWatchdog(void) {
+static void initWatchdog(void) {
   const esp_err_t initStatus = esp_task_wdt_init(kWatchdogTimeoutMs / 1000U, true);
 
   const bool initOk = (initStatus == ESP_OK) || (initStatus == ESP_ERR_INVALID_STATE);
@@ -43,7 +64,7 @@ void initWatchdog(void) {
   LOG_INFO("Watchdog ready");
 }
 
-void kickWatchdog(void) {
+static void kickWatchdog(void) {
   if (!g_watchdogReady) {
     return;
   }
@@ -55,37 +76,24 @@ void kickWatchdog(void) {
   }
 }
 
-void serviceCanRx(uint32_t networkNowMs) {
+static void serviceCanRx(uint32_t networkNowMs) {
   for (uint8_t i = 0U; i < kMaxRxFramesPerLoop; i++) {
-    aimPkt pkt = {};
+    aim::Pkt pkt = {};
     if (!g_aim.readPkt(pkt)) {
       break;
     }
 
-    if (pkt.type == AIM_TYP_TIME) {
-      g_aim.syncTime(static_cast<uint32_t>(pkt.getPayload64()));
+    if (pkt.type == aim::PacketType::Time) {
+      g_aim.syncTime(static_cast<uint32_t>(pkt.data));
       LOG_DEBUG("Time sync received: networkNowMs=%u", networkNowMs);
     }
 
-    (void)nodeHandleCanPacket(pkt, networkNowMs, g_aim);
+    (void)boardHandleCanPacket(pkt, networkNowMs, g_aim);
   }
 }
 
-void serviceTx(uint32_t schedulerNowMs, uint32_t networkNowMs) {
-  nodeServiceLocalTelemetry(schedulerNowMs, networkNowMs, g_aim);
 
-  if ((schedulerNowMs - g_schedulerState.lastHeartbeatTxMs) >= AIM_HEARTBEAT_TX_INTERVAL_DEFAULT_MS) {
-    g_schedulerState.lastHeartbeatTxMs = schedulerNowMs;
-    const uint32_t payload = static_cast<uint32_t>(g_schedulerState.value);
-    if (!g_aim.sendTimedPktEx(NODE_ENDPOINT_SYSTEM, networkNowMs, payload, AIM_DEST_COMMS, AIM_TYP_HEARTBEAT)) {
-      LOG_ERROR("Heartbeat TX failed");
-    } else {
-      LOG_DEBUG("Heartbeat TX ok");
-    }
-  }
-}
-
-void runStateMachine(uint32_t schedulerNowMs, uint32_t networkNowMs) {
+static void runStateMachine(uint32_t schedulerNowMs, uint32_t networkNowMs) {
   AIM_ASSERT(g_schedulerState.value <= FAULT);
 
   switch (g_schedulerState.value) {
@@ -96,6 +104,21 @@ void runStateMachine(uint32_t schedulerNowMs, uint32_t networkNowMs) {
         transitionTo(DEBUG_CONSOLE);
       }
 #endif
+      // Periodic logging
+      if (schedulerNowMs - g_schedulerState.lastLogMs >= kLogIntervalMs) {
+        g_schedulerState.lastLogMs = schedulerNowMs;
+        uint32_t row[BOARD_LOG_COL_COUNT];
+        row[BOARD_LOG_TIME_MS]   = networkNowMs;
+        std::memcpy(&row[BOARD_LOG_PT1_PSI],   &g_ptValues[0],      4);
+        std::memcpy(&row[BOARD_LOG_PT2_PSI],   &g_ptValues[1],      4);
+        std::memcpy(&row[BOARD_LOG_24V_SENSE], &g_24VoltageSense[0], 4);
+        std::memcpy(&row[BOARD_LOG_HALL],      &g_hallEffect[0],    4);
+        row[BOARD_LOG_RSSI]    = AimFlightRecorder::unsignify(WiFi.RSSI());
+        row[BOARD_LOG_VPT_FET] = g_24VoltageFet[0];
+        row[BOARD_LOG_V1_FET]  = g_valveStates[0];
+        row[BOARD_LOG_V2_FET]  = g_valveStates[1];
+        g_flightRecorder.writeRow(row);
+      }
       break;
     }
 
@@ -105,68 +128,11 @@ void runStateMachine(uint32_t schedulerNowMs, uint32_t networkNowMs) {
           static_cast<uint8_t>(g_schedulerState.value), networkNowMs);
       if (act == CONSOLE_ACTION_EXIT) {
         transitionTo(OPERATIONAL);
-      } else if (act == CONSOLE_ACTION_FLASH_INFO) {
-        // g_flashTable.commandInfo(&Serial);
-      } else if (act == CONSOLE_ACTION_FLASH_DUMP) {
-        // if (g_flashTable.commandDump(&Serial, 512U, nullptr, nullptr)) {
-        //   g_schedulerState.value = FLASH_DUMP;
-        //   Serial.print("state=");
-        //   Serial.println(static_cast<unsigned>(FLASH_DUMP));
-        // }
-      } else if (act == CONSOLE_ACTION_FLASH_ERASE) {
-        // g_flashTable.commandErase(&Serial);
-        // g_schedulerState.value = FLASH_ERASE;
       }
-      break;
-    }
-
-    case FLASH_DUMP: {
-      // if (Serial.available() > 0) {
-      //   const int c = Serial.read();
-      //   if (c == 'q' || c == 'Q') {
-      //     g_flashTable.cancelDump();
-      //     Serial.println("flash dump canceled");
-      //     g_schedulerState.value = DEBUG_CONSOLE;
-      //     Serial.print("state=");
-      //     Serial.println(static_cast<unsigned>(DEBUG_CONSOLE));
-      //     consoleResume();
-      //     break;
-      //   }
-      // }
-
-      // const FlashTableServiceResult r = g_flashTable.serviceDump(&Serial, 16U);
-      // if (r != FLASHTABLE_SERVICE_ACTIVE) {
-      //   static const char* const kDumpMsg[] = {
-      //     "flash dump idle",
-      //     nullptr,
-      //     "flash dump done",
-      //     "flash dump aborted",
-      //     "flash dump error"
-      //   };
-      //   const uint8_t idx = static_cast<uint8_t>(r);
-      //   if (idx < 5U && kDumpMsg[idx] != nullptr) {
-      //     Serial.println(kDumpMsg[idx]);
-      //   }
-      //   g_schedulerState.value = DEBUG_CONSOLE;
-      //   Serial.print("state=");
-      //   Serial.println(static_cast<unsigned>(DEBUG_CONSOLE));
-      //   consoleResume();
-      // }
-      break;
-    }
-
-    case FLASH_ERASE: {
-      // const FlashTableServiceResult r = g_flashTable.serviceErase();
-      // if (r != FLASHTABLE_SERVICE_ACTIVE) {
-      //   Serial.println(r == FLASHTABLE_SERVICE_DONE ? "flash erase done" : "flash erase error");
-      //   g_schedulerState.value = DEBUG_CONSOLE;
-      //   consoleResume();
-      // }
       break;
     }
 #endif
 
-    case SAFE_MODE:
     case LOW_POWER:
     case FAULT:
       break;
@@ -176,29 +142,59 @@ void runStateMachine(uint32_t schedulerNowMs, uint32_t networkNowMs) {
       break;
   }
 
-  nodeUpdate(schedulerNowMs);
-  serviceTx(schedulerNowMs, networkNowMs);
+  boardUpdate(schedulerNowMs);
+  boardServiceTx(schedulerNowMs, networkNowMs, g_aim,
+                 static_cast<uint32_t>(g_schedulerState.value));
 }
 
 void setup(void) {
-  AIM_ASSERT(NODE_ORIGIN <= AIM_ORG_ADDR_MAX);
-  Serial.begin(NODE_SERIAL_BAUD);
+  AIM_ASSERT(static_cast<uint8_t>(BOARD_ORIGIN) <= aim::kNodeMax);
+  Serial.begin(BOARD_SERIAL_BAUD);
   g_logger = &g_log;
-  LOG_INFO("Boot node origin=%u", static_cast<unsigned>(NODE_ORIGIN));
+  LOG_INFO("Boot board origin=%u", static_cast<unsigned>(BOARD_ORIGIN));
   initWatchdog();
 
+  if (g_fs.begin()) {
+    LOG_INFO("Storage ready.");
+    g_flightRecorder.begin();
+
+    const AimConfigLoad schemaStatus = g_nodeCfg.ensureSchema(BOARD_LOG_COL_COUNT, kBoardTelemetryHeaders);
+    if (schemaStatus != AimConfigLoad::OK && schemaStatus != AimConfigLoad::NOT_PRESENT) {
+      LOG_ERROR("Telemetry schema check failed (%d)", static_cast<int>(schemaStatus));
+    }
+
+    switch (g_nodeCfg.load(g_boardConfig)) {
+      case AimConfigLoad::OK:
+        LOG_INFO("Loaded config overlay: %s (CAN ID: %u)",
+                 g_boardConfig.boardName,
+                 g_boardConfig.canId);
+        break;
+      case AimConfigLoad::NOT_PRESENT:
+        LOG_INFO("No stored config — using compiled defaults");
+        break;
+      default:
+        LOG_ERROR("Config load failed — using compiled defaults");
+        break;
+    }
+  } else {
+    LOG_ERROR("Storage init FAILED, using macro defaults.");
+  }
+
   g_aim.begin();
-  if (!nodeInitHardware()) {
+  if (!boardInitHardware()) {
     LOG_ERROR("Hardware init failed");
     transitionTo(FAULT);
     return;
   }
 #ifndef FLIGHT_BUILD
-  consoleInit(Serial, g_aim, g_log);
+  if (!consoleInit(Serial, g_canHw, g_log, g_fs, g_flightRecorder, g_boardConfig, g_nodeCfg)) {
+    LOG_ERROR("Console init failed");
+    transitionTo(FAULT);
+    return;
+  }
   Serial.println("Console ready. d=enter debug");
 #endif
-  g_schedulerState.lastHeartbeatTxMs = millis();
-  nodeStartTasks(g_aim);
+  boardStartNetwork();
   transitionTo(OPERATIONAL);
 }
 

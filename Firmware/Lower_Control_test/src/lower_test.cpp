@@ -19,13 +19,25 @@
 #include <SPIFlash.h>
 #include <FastLED.h>
 #include <prop_testing.h>
+#include <AimFileSystem.h>
+#include <AimFlightRecorder.h>
+#include <AimConfigStore.h>
 
 SoftwareSerial serial(USART_RX_PIN, USART_TX_PIN);
 
 const int ledArray[] = {CAN_LED_PIN, DB_LED_PIN};
 
 ADS131M04 adc(ADC_CS_PIN, ADC_DRDY_PIN, &SPI);
-SPIFlash flash(FL_CS_PIN);
+
+struct LowerConfig {
+    // Application configuration
+};
+
+static LowerConfig g_appConfig;
+static SerialFlashDriver g_flashHw(FL_CS_PIN);
+static AimFileSystem g_fs(&g_flashHw);
+static AimFlightRecorder g_flightRecorder(g_fs, 8, 100, 2 * 1024 * 1024);
+static AimConfigStore g_configStore(g_fs);
 
 #define NUM_LEDS 1
 CRGB rgb_leds[NUM_LEDS];
@@ -58,6 +70,7 @@ void pollADC()
             float psi2 = processPT(volts[1]);
 
             float tempC = processTC(volts[2], CJC_SENSE_PIN);
+            float coldJunc = readColdJunction(CJC_SENSE_PIN);
 
             serial.print("PT1: ");
             serial.print(psi1, 1);
@@ -137,10 +150,10 @@ void setup()
     Wire1.begin();
     Wire2.begin();
 
-    pinMode(FL_CS_PIN, OUTPUT);
-    digitalWrite(FL_CS_PIN, HIGH);
+    if (g_fs.begin()) {
+        // Storage initialized
+    }
 
-    flash.initialize();
     adc.init();
 
     if (!hallSensor1.init(0x35, Wire1))
