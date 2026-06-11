@@ -1,7 +1,9 @@
 #include "board.h"
 
 #include <ADS131M04.h>
+#include <TMAG5273.h>
 #include <SPI.h>
+#include <Wire.h>
 #include <logger.h>
 #include <cstring>
 #include <WiFi.h>
@@ -20,11 +22,15 @@ float g_24VoltageSense[2] = {0.0f, 0.0f};
 float g_thermocouple      = 0.0f;
 
 static ADS131M04 s_adc(-1, ADC_DRDY_PIN, &SPI);
+static TMAG5273 s_hall(HALL_I2C_ADDR, &Wire);
 
 constexpr uint8_t kAdcClockChannel = 0U;
 constexpr uint32_t kAdcClockHz = 8192000U;
 constexpr uint8_t kAdcClockDuty = 1U;
 constexpr uint32_t kTelemetryPeriodMs = 100U;
+constexpr uint32_t kLowerStaleTimeoutMs = 1000U;
+constexpr uint32_t kValveEchoTimeoutMs = 500U;
+
 constexpr size_t kAdcChannelCount = 4U;
 constexpr uint8_t kValveIndexBase  = 2U;
 constexpr uint8_t kValveLatchCount = 2U;
@@ -37,9 +43,14 @@ constexpr uint8_t kValveLatchEndpoints[kValveLatchCount] = {
 
 struct ValveLatch {
     uint32_t payload;
+    uint32_t sentMs;
     bool     dirty;
+    bool     awaitingEcho;
 };
 static ValveLatch s_valveLatch[kValveLatchCount] = {};
+
+static uint32_t s_lowerLastRxMs = 0U;
+static bool     s_lowerLinkUp   = false;
 
 constexpr float kPtShuntResistanceOhms = 62.0f;
 constexpr float kPtMaxPsi = 100.0f;
@@ -198,30 +209,17 @@ static uint32_t     s_tsOffset = 0U;
 static uint16_t     s_streamFrequencyHz = 0U;  // 0 = stream off
 static uint32_t     s_lastStreamTxMs = 0U;
 
-// Counts reported to the QLCP server: PT1-4 sensors, SOL1-4 controls.
-constexpr uint8_t kQlcpControlCount = 4U;
-constexpr uint8_t kQlcpSensorCount  = 4U;
+// Counts reported to the QLCP server: PT1-4 sensors, SOL1-4 controls, plus VPT (index 4).
+constexpr uint8_t kQlcpControlCount = 5U;
+constexpr uint8_t kQlcpSensorCount  = 7U;
 
 static void s_fillHeader(qlcp_header& header) {
   header.sequence = static_cast<uint8_t>(s_sequence++);
   header.timestamp = s_tsOffset + millis();
 }
 
-static const char* s_netStateName(QlcpNetState st) {
-  switch (st) {
-    case QLCP_NET_IDLE:        return "IDLE";
-    case QLCP_NET_WIFI_START:  return "WIFI_START";
-    case QLCP_NET_WIFI_WAIT:   return "WIFI_WAIT";
-    case QLCP_NET_DISCOVER:    return "DISCOVER";
-    case QLCP_NET_TCP_CONNECT: return "TCP_CONNECT";
-    case QLCP_NET_CONNECTED:   return "CONNECTED";
-    case QLCP_NET_BACKOFF:     return "BACKOFF";
-    default:                   return "?";
-  }
-}
-
 static void s_netTransition(QlcpNetState next, uint32_t nowMs) {
-  LOG_INFO("QLCP net: %s -> %s", s_netStateName(s_netState), s_netStateName(next));
+  LOG_INFO("QLCP net: %u -> %u", s_netState, next);
   s_netState = next;
   s_stateEnteredMs = nowMs;
 }
@@ -256,6 +254,11 @@ static bool s_setValveByIndex(uint8_t index, bool open) {
     }
     return true;
 #endif
+  }
+  if (index == 4U) {
+    digitalWrite(VPT_EN_PIN, open ? HIGH : LOW);
+    g_24VoltageFet[0] = open;
+    return true;
   }
   return false;
 }
@@ -322,9 +325,12 @@ bool boardInitHardware(void) {
 #ifndef MOCK_HARDWARE
   SPI.begin(ADC_SCLK_PIN, ADC_MISO_PIN, ADC_MOSI_PIN, -1);
   s_adc.init();
+  Wire.begin(HALL_SDA_PIN, HALL_SCL_PIN);
+  s_hall.init();
 #endif
 
   digitalWrite(VPT_EN_PIN, HIGH);
+  g_24VoltageFet[0] = true;
   s_boardHardwareReady = true;
   LOG_INFO("Board hardware initialized");
 
@@ -334,6 +340,23 @@ bool boardInitHardware(void) {
 
 void boardServiceTx(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& aim, uint32_t boardState) {
   AIM_ASSERT(s_boardHardwareReady);
+
+  static uint32_t s_lastBoardState = 0xFFFFFFFFU;
+  if (boardState != s_lastBoardState) {
+    s_lastBoardState = boardState;
+    uint8_t r = 0, g = 0, b = 0;
+    switch (boardState) {
+      case OPERATIONAL:   g = 255; break;
+      case FAULT:         r = 255; break;
+      case DEBUG_CONSOLE: r = 255; g = 191; break; // Amber
+      default:            b = 255; break;
+    }
+    neopixelWrite(RGB_DATA_PIN, r, g, b);
+
+    if (boardState == LOW_POWER || boardState == FAULT) {
+      (void)s_setValveByIndex(4U, false);
+    }
+  }
 
   // PT1 and PT2: sample ADC + send at 100 ms; lastSentMs updated unconditionally
   // so a failed send drops that sample and the next fires a full period later.
@@ -346,6 +369,7 @@ void boardServiceTx(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& 
     g_ptValues[1] = 50.0f + 10.0f * cos(schedulerNowMs / 1000.0f);
     g_ptValues[2] = 40.0f + 5.0f * sin(schedulerNowMs / 2000.0f);
     g_ptValues[3] = 40.0f + 5.0f * cos(schedulerNowMs / 2000.0f);
+    g_hallEffect[0] = 10.0f * sinf(schedulerNowMs / 500.0f);
 #else
     int32_t rawData[kAdcChannelCount] = {0};
     if (s_adc.readChannels(rawData)) {
@@ -358,16 +382,16 @@ void boardServiceTx(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& 
     } else {
       LOG_WARN("ADC sample timeout");
     }
+    float flux[3] = {0.0f};
+    (void)s_hall.getAllFlux(flux);
+    g_hallEffect[0] = flux[0];
 #endif
 
     for (size_t i = 0U; i < (sizeof(kLocalPtSensors) / sizeof(kLocalPtSensors[0])); i++) {
-      uint32_t ptPayload = 0U;
-      static_assert(sizeof(ptPayload) == sizeof(g_ptValues[0]), "float payload packing assumes 32-bit float");
-      std::memcpy(&ptPayload, &g_ptValues[i], sizeof(ptPayload));
       aim::Pkt pkt = {};
       pkt.dest = aim::Node::Comms;
       pkt.type = aim::PacketType::Sensor;
-      if (pkt.packData(0U, networkNowMs, ptPayload)) {
+      if (pkt.packFloat(0U, networkNowMs, g_ptValues[i])) {
         (void)aim.sendPkt(pkt);
       }
     }
@@ -385,6 +409,17 @@ void boardServiceTx(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& 
     }
   }
 
+  // Staleness check for Lower Control
+  const bool currentlyUp = (schedulerNowMs - s_lowerLastRxMs) < kLowerStaleTimeoutMs;
+  if (currentlyUp != s_lowerLinkUp) {
+    s_lowerLinkUp = currentlyUp;
+    if (s_lowerLinkUp) {
+      LOG_INFO("Lower Control link UP");
+    } else {
+      LOG_WARN("Lower Control link STALE");
+    }
+  }
+
   // Remote valve latches: dirty-driven, retried every tick until sendPkt succeeds.
   for (uint8_t i = 0U; i < kValveLatchCount; i++) {
     if (s_valveLatch[i].dirty) {
@@ -393,10 +428,17 @@ void boardServiceTx(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& 
       pkt.type = aim::PacketType::Valve;
       if (pkt.packData(kValveLatchEndpoints[i], networkNowMs, s_valveLatch[i].payload)) {
         if (aim.sendPkt(pkt)) {
-          s_valveLatch[i].dirty = false;
+          s_valveLatch[i].dirty        = false;
+          s_valveLatch[i].awaitingEcho = true;
+          s_valveLatch[i].sentMs       = schedulerNowMs;
         }
         // sendPkt failure: dirty stays set, retried next tick
       }
+    }
+
+    if (s_valveLatch[i].awaitingEcho && (schedulerNowMs - s_valveLatch[i].sentMs) >= kValveEchoTimeoutMs) {
+      LOG_ERROR("Lower valve %u echo timeout (payload=%u)", i, s_valveLatch[i].payload);
+      s_valveLatch[i].awaitingEcho = false;
     }
   }
 }
@@ -406,37 +448,79 @@ bool boardHandleCanPacket(const aim::Pkt& pkt, uint32_t networkNowMs, AimNetwork
     return false;
   }
 
+  const uint8_t endpointId = pkt.getEndpointId();
+  if (endpointId < BOARD_ENDPOINT_LOWER_BASE) {
+    return false;
+  }
+
+  // Any lower packet accepted below updates our staleness tracking.
+  bool accepted = false;
+
   if (pkt.type == aim::PacketType::Valve) {
-    const uint8_t endpointId = pkt.getEndpointId();
-    if (endpointId >= BOARD_ENDPOINT_LOWER_BASE) {
-      const bool openCommand = (pkt.getPayload() != BOARD_ACTUATOR_CLOSED);
-      // Lower valve state echo received back from Lower Control!
-      int valveIdx = endpointId - (BOARD_ENDPOINT_LOWER_BASE + 2U);
-      if (valveIdx >= 0 && valveIdx < 2) {
-        g_valveStates[2 + valveIdx] = openCommand;
-        LOG_INFO("Lower valve %d state echo: %d", valveIdx, openCommand);
+    const uint32_t payload = pkt.getPayload();
+    const bool state = (payload != BOARD_ACTUATOR_CLOSED);
+
+    switch (endpointId) {
+      case (BOARD_ENDPOINT_LOWER_BASE + BOARD_ENDPOINT_PT1):
+      case (BOARD_ENDPOINT_LOWER_BASE + BOARD_ENDPOINT_PT2): {
+        const uint8_t latchIdx = endpointId - (BOARD_ENDPOINT_LOWER_BASE + BOARD_ENDPOINT_PT1);
+        g_valveStates[2 + latchIdx] = state;
+        if (s_valveLatch[latchIdx].awaitingEcho && s_valveLatch[latchIdx].payload == payload) {
+          s_valveLatch[latchIdx].awaitingEcho = false;
+        }
+        LOG_INFO("Lower valve %u state echo: %d", latchIdx, state);
+        accepted = true;
+        break;
       }
-      return true;
+      case (BOARD_ENDPOINT_LOWER_BASE + 4U): // VSOL FET
+        g_24VoltageFet[2] = state;
+        accepted = true;
+        break;
+      case (BOARD_ENDPOINT_LOWER_BASE + 5U): // VPT FET
+        g_24VoltageFet[1] = state;
+        accepted = true;
+        break;
+      default:
+        break;
+    }
+  } else if (pkt.type == aim::PacketType::Sensor) {
+    float val = pkt.payloadAsFloat();
+
+    switch (endpointId) {
+      case (BOARD_ENDPOINT_LOWER_BASE + BOARD_ENDPOINT_TC):
+        g_thermocouple = val;
+        accepted = true;
+        break;
+      case (BOARD_ENDPOINT_LOWER_BASE + BOARD_ENDPOINT_PT1):
+        g_ptValues[2] = val;
+        accepted = true;
+        break;
+      case (BOARD_ENDPOINT_LOWER_BASE + BOARD_ENDPOINT_PT2):
+        g_ptValues[3] = val;
+        accepted = true;
+        break;
+      case (BOARD_ENDPOINT_LOWER_BASE + 4U): // VSOL SENSE
+        g_24VoltageSense[1] = val;
+        accepted = true;
+        break;
+      case (BOARD_ENDPOINT_LOWER_BASE + BOARD_ENDPOINT_HALL1):
+        g_hallEffect[1] = val;
+        accepted = true;
+        break;
+      case (BOARD_ENDPOINT_LOWER_BASE + BOARD_ENDPOINT_HALL2):
+        g_hallEffect[2] = val;
+        accepted = true;
+        break;
+      default:
+        break;
     }
   }
 
-  if (pkt.type == aim::PacketType::Sensor) {
-    const uint8_t endpointId = pkt.getEndpointId();
-    if (endpointId >= BOARD_ENDPOINT_LOWER_BASE) {
-      float val = 0.0f;
-      const uint32_t payload = pkt.getPayload();
-      std::memcpy(&val, &payload, sizeof(val));
-      // TODO: add non PT support
-      int ptIdx = endpointId - BOARD_ENDPOINT_LOWER_BASE;
-      if (ptIdx >= 0 && ptIdx < 2) {
-        g_ptValues[2 + ptIdx] = val;
-        LOG_DEBUG("Lower PT %d telemetry received: %.2f PSI", ptIdx, val);
-      }
-    }
-    return true;
+  if (accepted) {
+    s_lowerLastRxMs = millis();
   }
 
-  return false;
+  return accepted;
 }
 
 void boardUpdate(uint32_t schedulerNowMs) {
@@ -497,7 +581,11 @@ static void s_qlcpHandlePacket(const qlcp_client_payload& in) {
       qlcp_control_data controlData[kQlcpControlCount] = {};
       for (uint8_t i = 0U; i < kQlcpControlCount; i++) {
         controlData[i].control_id = i;
-        controlData[i].control_state = g_valveStates[i] ? QLCP_CS_OPEN : QLCP_CS_CLOSED;
+        if (i < 4U) {
+          controlData[i].control_state = g_valveStates[i] ? QLCP_CS_OPEN : QLCP_CS_CLOSED;
+        } else {
+          controlData[i].control_state = g_24VoltageFet[0] ? QLCP_CS_OPEN : QLCP_CS_CLOSED;
+        }
       }
 
       qlcp_server_payload out = {};
@@ -654,10 +742,15 @@ static void s_qlcpTelemetryService(uint32_t nowMs) {
   s_lastStreamTxMs = nowMs;
 
   qlcp_sensor_data readings[kQlcpSensorCount] = {};
-  for (uint8_t i = 0U; i < kQlcpSensorCount; i++) {
+  for (uint8_t i = 0U; i < 4; i++) {
     readings[i].sensor_id = i;
     readings[i].unit = QLCP_UNIT_PSI;
     readings[i].value = g_ptValues[i];
+  }
+  for (uint8_t i = 0U; i < 3; i++) {
+    readings[4+i].sensor_id = 4+i;
+    readings[4+i].unit = QLCP_UNIT_AMPS;
+    readings[4+i].value = g_hallEffect[i];
   }
 
   qlcp_data_packet pkt = {};
@@ -675,15 +768,16 @@ void boardStartNetwork(void) {
 
 #ifndef FLIGHT_BUILD
 void boardPrintNetworkStatus(Print& out) {
-  out.printf("net=%s ip=%s rssi=%d qlcp=%s svr=%s:%u/%u stream=%uHz\n",
+  out.printf("net=%s ip=%s rssi=%d qlcp=%u svr=%s:%u/%u stream=%uHz lower=%s\n",
     WIFI_SSID, WiFi.localIP().toString().c_str(), WiFi.RSSI(),
-    s_netStateName(s_netState),
+    s_netState,
     s_netLink.server_ip, s_netLink.server_tcp_port, s_netLink.server_udp_port,
-    static_cast<unsigned>(s_streamFrequencyHz));
+    static_cast<unsigned>(s_streamFrequencyHz),
+    s_lowerLinkUp ? "OK" : "STALE");
 }
 
 bool boardSetValveStateDirect(uint8_t index, bool open) {
-  if (index >= 4U) { return false; }
+  if (index >= 5U) { return false; }
   LOG_DEBUG("Direct console actuator override index=%u open=%d", index, open);
   return s_setValveByIndex(index, open);
 }
