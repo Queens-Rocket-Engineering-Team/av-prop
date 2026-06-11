@@ -8,6 +8,7 @@
 #include <aim_can_driver.h>
 #include <aim_network.h>
 #include <aim_safety.h>
+#include <AimNodeConfig.h>
 
 // Pin Definitions
 constexpr uint8_t CAN_TX_PIN = 1;
@@ -37,18 +38,19 @@ constexpr uint8_t BUZZ_EN_PIN = 41;
 constexpr uint8_t RGB_DATA_PIN = 42;
 
 // board Identity & Configuration
-#define BOARD_ORIGIN AIM_ORG_UPROP
-#define BOARD_NAME "UPPER_CONTROL"
+#define BOARD_ORIGIN aim::Node::UProp
+#define BOARD_NAME "PEGASUS"
 
 enum BoardTelemetryCol {
   BOARD_LOG_TIME_MS,
   BOARD_LOG_PT1_PSI,
   BOARD_LOG_PT2_PSI,
-  BOARD_LOG_V1,
-  BOARD_LOG_V2,
-  BOARD_LOG_V3,
-  BOARD_LOG_V4,
+  BOARD_LOG_24V_SENSE,
+  BOARD_LOG_HALL,
   BOARD_LOG_RSSI,
+  BOARD_LOG_VPT_FET,
+  BOARD_LOG_V1_FET,
+  BOARD_LOG_V2_FET,
   BOARD_LOG_COL_COUNT
 };
 
@@ -56,17 +58,15 @@ static constexpr const char* kBoardTelemetryHeaders[BOARD_LOG_COL_COUNT] = {
   "Time_ms",
   "PT1_PSI",
   "PT2_PSI",
-  "V1",
-  "V2",
-  "V3",
-  "V4",
-  "RSSI"
+  "24V_SEN",
+  "HALL",
+  "RSSI",
+  "VPT_FET",
+  "V1_FET",
+  "V2_FET",
 };
 
-struct BoardConfig {
-  char boardName[32];
-  uint8_t canId;
-};
+using BoardConfig = AimNodeCfg;
 
 extern BoardConfig g_boardConfig;
 
@@ -76,7 +76,7 @@ extern BoardConfig g_boardConfig;
 // Hall: [0] UPPER_HALL1, [1] LOWER_HALL1, [2] LOWER_HALL2.
 // VoltageSense: [0] UPPER_24V_SENSE, [1] LOWER_VSOL_SENSE.
 extern bool  g_valveStates[4];
-extern bool  g_24VoltageRelays[3];
+extern bool  g_24VoltageFet[3];
 extern float g_ptValues[4];
 extern float g_thermocouple;
 extern float g_hallEffect[3];
@@ -106,9 +106,8 @@ enum BoardState : uint8_t {
   INIT = 0U,
   OPERATIONAL = 1U,
   DEBUG_CONSOLE = 2U,
-  SAFE_MODE = 3U,
-  LOW_POWER = 4U,
-  FAULT = 5U
+  LOW_POWER = 3U,
+  FAULT = 4U
 };
 
 enum BoardActuatorCommand : uint32_t {
@@ -118,7 +117,7 @@ enum BoardActuatorCommand : uint32_t {
 
 bool boardInitHardware(void);
 void boardServiceTx(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& aim, uint32_t boardState);
-bool boardHandleCanPacket(const aimPkt& pkt, uint32_t networkNowMs, AimNetwork& aim);
+bool boardHandleCanPacket(const aim::Pkt& pkt, uint32_t networkNowMs, AimNetwork& aim);
 
 // Add board-specific periodic behavior in boardUpdate().
 void boardUpdate(uint32_t schedulerNowMs);

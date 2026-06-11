@@ -10,7 +10,8 @@ class AimCanDriver;
 class Logger;
 class AimFileSystem;
 class AimFlightRecorder;
-struct BoardConfig;
+class AimNodeConfig;
+struct AimNodeCfg;
 
 enum ConsoleAction : uint8_t {
   CONSOLE_ACTION_NONE        = 0U,
@@ -24,7 +25,8 @@ bool consoleInit(Stream& serial,
                  Logger& log,
                  AimFileSystem& fs,
                  AimFlightRecorder& recorder,
-                 BoardConfig& boardConfig);
+                 AimNodeCfg& boardConfig,
+                 AimNodeConfig& nodeCfg);
 
 ConsoleAction consoleCheckEntry(void);
 ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs);

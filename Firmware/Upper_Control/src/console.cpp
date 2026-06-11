@@ -3,11 +3,11 @@
 #ifndef FLIGHT_BUILD
 
 #include "board.h"
-#include "board_config.h"
 #include <logger.h>
 #include <aim_can_driver.h>
 #include <AimFileSystem.h>
 #include <AimFlightRecorder.h>
+#include <AimNodeConfig.h>
 
 #include <cstdlib>
 #include <cstring>
@@ -36,7 +36,19 @@ static AimCanDriver*      s_canDriver   = nullptr;
 static Logger*            s_log         = nullptr;
 static AimFileSystem*     s_fs          = nullptr;
 static AimFlightRecorder* s_recorder    = nullptr;
-static BoardConfig*       s_boardConfig = nullptr;
+static AimNodeCfg*        s_boardConfig = nullptr;
+static AimNodeConfig*     s_nodeCfg     = nullptr;
+static bool               s_rebootRequired = false;
+
+static bool storageFormatForMaintenance(void) {
+  if (s_recorder->isDumping()) { s_recorder->stopDump(); }
+  if (!s_recorder->closeLog()) { LOG_WARN("Log close failed before format"); }
+  if (!s_fs->format()) { return false; }
+  s_rebootRequired = true;
+  return true;
+}
+
+static bool configRebootRequired(void) { return s_rebootRequired; }
 
 static ConsoleMenu s_menu = CONSOLE_MENU_ROOT;
 static ConsoleMenu s_menuStack[kMenuStackDepthMax];
@@ -49,22 +61,6 @@ static uint8_t     s_bootCanId = 0U;            // canId active since boot
 
 static char    s_inputBuf[kInputBufLen];
 static uint8_t s_inputLen = 0U;
-
-static bool consoleReady(void) {
-  return (s_serial != nullptr) && (s_canDriver != nullptr) &&
-         (s_log != nullptr) && (s_fs != nullptr) && (s_recorder != nullptr) &&
-         (s_boardConfig != nullptr);
-}
-
-static void copyBoardConfig(BoardConfig& dst, const BoardConfig& src) {
-  strlcpy(dst.boardName, src.boardName, sizeof(dst.boardName));
-  dst.canId = src.canId;
-}
-
-static bool configIsDirty(void) {
-  return (std::strcmp(s_boardConfig->boardName, s_savedBoardConfig.boardName) != 0) ||
-         (s_boardConfig->canId != s_savedBoardConfig.canId);
-}
 
 static void resetInput(void) {
   s_inputLen = 0U;
@@ -122,7 +118,7 @@ static void printStatus(uint8_t currentState, uint32_t networkNowMs) {
                    static_cast<unsigned>(currentState),
                    static_cast<unsigned>(s_log->filterMask()),
                    static_cast<unsigned long>(networkNowMs));
-  s_serial->printf("version=%s build=%s %s\n", AIM_NETWORK_VERSION_STRING, __DATE__, __TIME__);
+  s_serial->printf("version=%s build=%s %s\n", aim::kNetworkVersionString, __DATE__, __TIME__);
 }
 
 static void setLogMask(uint8_t mask, const char* label) {
@@ -134,7 +130,7 @@ static bool parseCanId(uint8_t& outCanId) {
   s_inputBuf[s_inputLen] = '\0';
   char* end = nullptr;
   const long parsed = std::strtol(s_inputBuf, &end, 10);
-  if ((end == s_inputBuf) || (*end != '\0') || (parsed < 1L) || (parsed > AIM_ORG_ADDR_MAX)) {
+  if ((end == s_inputBuf) || (*end != '\0') || (parsed < 1L) || (parsed > aim::kNodeMax)) {
     return false;
   }
   outCanId = static_cast<uint8_t>(parsed);
@@ -142,8 +138,9 @@ static bool parseCanId(uint8_t& outCanId) {
 }
 
 static void saveConfig(void) {
-  if (configSaveBoard(*s_boardConfig) == ConfigStatus::OK) {
-    copyBoardConfig(s_savedBoardConfig, *s_boardConfig);
+  if (s_nodeCfg->save(*s_boardConfig)) {
+    strlcpy(s_savedBoardConfig.boardName, s_boardConfig->boardName, sizeof(s_savedBoardConfig.boardName));
+    s_savedBoardConfig.canId = s_boardConfig->canId;
     s_configDiscardArmed = false;
     s_serial->println("[OK] config saved");
     if (s_boardConfig->canId != s_bootCanId) {
@@ -155,7 +152,7 @@ static void saveConfig(void) {
 }
 
 static void resetConfig(void) {
-  if (configResetBoard() == ConfigStatus::OK) {
+  if (s_nodeCfg->reset()) {
     s_serial->printf("ram:   name=%s can=%u (active until reboot)\n",
                      s_boardConfig->boardName, s_boardConfig->canId);
     s_serial->println("flash: identity cleared — compiled defaults on next boot");
@@ -195,16 +192,13 @@ static void showMenu(ConsoleMenu menu) {
     case CONSOLE_MENU_CONFIG_CAN:
       s_serial->print("new can [b/ESC/Ctrl-C:cancel]: ");
       break;
-    case CONSOLE_MENU_SENSOR_CONTROL: {
-      const char v0 = boardGetValveState(0) ? 'O' : 'C';
-      const char v1 = boardGetValveState(1) ? 'O' : 'C';
-      const char v2 = boardGetValveState(2) ? 'O' : 'C';
-      const char v3 = boardGetValveState(3) ? 'O' : 'C';
+    case CONSOLE_MENU_SENSOR_CONTROL:
       s_serial->printf("DBG > CTL [q:exit b:back] 1:rfr 2:V1[%c] 3:V2[%c] 4:V3[%c] 5:V4[%c]\n",
-                       v0, v1, v2, v3);
-      boardPrintSensorStatus(*s_serial);
+                       g_valveStates[0] ? 'O' : 'C', g_valveStates[1] ? 'O' : 'C',
+                       g_valveStates[2] ? 'O' : 'C', g_valveStates[3] ? 'O' : 'C');
+      s_serial->printf("pt1=%.1f pt2=%.1f pt3=%.1f pt4=%.1f\n",
+                       g_ptValues[0], g_ptValues[1], g_ptValues[2], g_ptValues[3]);
       break;
-    }
     default:
       s_serial->println("DBG [q:exit b:back] 1:sts 2:log 3:fls 4:net 5:can 6:ctl");
       break;
@@ -212,13 +206,16 @@ static void showMenu(ConsoleMenu menu) {
 }
 
 static bool leaveConfigMenu(void) {
-  if (!configIsDirty()) {
+  if (!((std::strcmp(s_boardConfig->boardName, s_savedBoardConfig.boardName) != 0) ||
+         (s_boardConfig->canId != s_savedBoardConfig.canId))) 
+  {
     popMenu();
   } else if (!s_configDiscardArmed) {
     s_configDiscardArmed = true;
     s_serial->println("[?] unsaved changes — press 3:sav, or b again to discard");
   } else {
-    copyBoardConfig(*s_boardConfig, s_savedBoardConfig);
+    strlcpy(s_boardConfig->boardName, s_savedBoardConfig.boardName, sizeof(s_boardConfig->boardName));
+    s_boardConfig->canId = s_savedBoardConfig.canId;
     s_serial->println("[--] config changes discarded");
     popMenu();
   }
@@ -249,7 +246,7 @@ static void finishInput(void) {
     uint8_t canId = 0U;
     if (!parseCanId(canId)) {
       s_serial->println();
-      s_serial->printf("[ERR] CAN ID must be 1-%u\n", static_cast<unsigned>(AIM_ORG_ADDR_MAX));
+      s_serial->printf("[ERR] CAN ID must be 1-%u\n", static_cast<unsigned>(aim::kNodeMax));
       resetInput();
       showMenu(s_menu);
       return;
@@ -308,22 +305,23 @@ bool consoleInit(Stream& serial,
                  Logger& log,
                  AimFileSystem& fs,
                  AimFlightRecorder& recorder,
-                 BoardConfig& boardConfig) {
+                 AimNodeCfg& boardConfig,
+                 AimNodeConfig& nodeCfg) {
   s_serial      = &serial;
   s_canDriver   = &canDriver;
   s_log         = &log;
   s_fs          = &fs;
   s_recorder    = &recorder;
   s_boardConfig = &boardConfig;
+  s_nodeCfg     = &nodeCfg;
   s_bootCanId   = boardConfig.canId;
   resetMenu();
-  copyBoardConfig(s_savedBoardConfig, boardConfig);
-  return consoleReady();
+  strlcpy(s_savedBoardConfig.boardName, boardConfig.boardName, sizeof(s_savedBoardConfig.boardName));
+  s_savedBoardConfig.canId = boardConfig.canId;
+  return true;
 }
 
 ConsoleAction consoleCheckEntry(void) {
-  if (!consoleReady()) { return CONSOLE_ACTION_NONE; }
-
   const int c = readChar();
   if (c == kConsoleEntryKey) {
     resetMenu();
@@ -344,7 +342,6 @@ ConsoleAction consoleCheckEntry(void) {
 }
 
 ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
-  if (!consoleReady()) { return CONSOLE_ACTION_NONE; }
   if (s_menu == CONSOLE_MENU_FLASH_DUMPING) { return serviceDump(); }
 
   const int c = readChar();
@@ -421,7 +418,7 @@ ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
       switch (c) {
         case 'b': popMenu(); break;
         case '1':
-          if (storageFormatForMaintenance() == ConfigStatus::OK) {
+          if (storageFormatForMaintenance()) {
             s_serial->println("[OK] flash erased — reboot required before dump/config operations");
           } else {
             s_serial->println("[ERR] erase failed");
@@ -440,7 +437,7 @@ ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
         case '2': beginInput(CONSOLE_MENU_CONFIG_CAN); break;
         case '3': saveConfig(); break;
         case '4': resetConfig(); break;
-        case '5': (void)configPrintBoard(*s_serial); break;
+        case '5': s_nodeCfg->print(*s_serial); break;
         default: handled = false; break;
       }
       break;
@@ -449,10 +446,10 @@ ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
       switch (c) {
         case 'b': popMenu(); break;
         case '1': break;
-        case '2': (void)boardSetValveStateDirect(0, !boardGetValveState(0)); break;
-        case '3': (void)boardSetValveStateDirect(1, !boardGetValveState(1)); break;
-        case '4': (void)boardSetValveStateDirect(2, !boardGetValveState(2)); break;
-        case '5': (void)boardSetValveStateDirect(3, !boardGetValveState(3)); break;
+        case '2': (void)boardSetValveStateDirect(0, !g_valveStates[0]); break;
+        case '3': (void)boardSetValveStateDirect(1, !g_valveStates[1]); break;
+        case '4': (void)boardSetValveStateDirect(2, !g_valveStates[2]); break;
+        case '5': (void)boardSetValveStateDirect(3, !g_valveStates[3]); break;
         default: handled = false; break;
       }
       break;
