@@ -12,6 +12,13 @@
 
 #include "TMAG5273.h"
 
+TMAG5273::TMAG5273(uint8_t addr, TwoWire* wire) : _addr(addr), _i2c(wire) {}
+
+bool TMAG5273::init() {
+    if (!_i2c) return false;
+    return init(_addr, *_i2c);
+}
+
 /// @brief initialize the sensor
 /// @param addr I2C address of sensor (0x35 by default)
 /// @param port reference to I2C port
