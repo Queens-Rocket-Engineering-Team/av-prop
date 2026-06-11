@@ -3,6 +3,7 @@
 #include <ADS131M04.h>
 #include <SPI.h>
 #include <logger.h>
+#include <aim_tx_policy.h>
 
 #include <cstring>
 #include <WiFi.h>
@@ -13,18 +14,27 @@ extern "C" {
 }
 
 bool g_boardHardwareReady = false;
-uint32_t g_lastTelemetryMs = 0U;
-bool g_valveStates[4] = {false, false, false, false};
-float g_ptValues[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+bool g_valveStates[4]     = {false, false, false, false};
+bool g_24VoltageRelays[3] = {false, false, false};
+float g_ptValues[4]       = {0.0f, 0.0f, 0.0f, 0.0f};
+float g_thermocouple      = 0.0f;
+float g_hallEffect[3]     = {0.0f, 0.0f, 0.0f};
+float g_24VoltageSense[2] = {0.0f, 0.0f};
 
 ADS131M04 g_adc(-1, ADC_DRDY_PIN, &SPI);
-static AimNetwork* s_aimPtr = nullptr;
 
 constexpr uint8_t kAdcClockChannel = 0U;
 constexpr uint32_t kAdcClockHz = 8192000U;
 constexpr uint8_t kAdcClockDuty = 1U;
 constexpr uint32_t kTelemetryPeriodMs = 100U;
 constexpr size_t kAdcChannelCount = 4U;
+constexpr uint8_t kValveIndexBase  = 2U;
+constexpr uint8_t kValveLatchCount = 2U;
+
+static AimTxPolicy s_txPolicy;
+static uint8_t s_ptSlots[2]                   = {AimTxPolicy::kInvalidSlot, AimTxPolicy::kInvalidSlot};
+static uint8_t s_hbSlot                       = AimTxPolicy::kInvalidSlot;
+static uint8_t s_latchSlots[kValveLatchCount] = {AimTxPolicy::kInvalidSlot, AimTxPolicy::kInvalidSlot};
 
 constexpr float kPtShuntResistanceOhms = 62.0f;
 constexpr float kPtMaxPsi = 100.0f;
@@ -222,10 +232,22 @@ static void s_netFail(uint32_t nowMs) {
 static void qlcpNetService(uint32_t nowMs);
 static void qlcpTelemetryService(uint32_t nowMs);
 
-int s_localValveIndexFromEndpoint(uint8_t endpointId) {
-  if (endpointId == BOARD_ENDPOINT_VALVE1) return 0;
-  if (endpointId == BOARD_ENDPOINT_VALVE2) return 1;
-  return -1;
+static bool s_setValveByIndex(uint8_t index, bool open) {
+  if (index < 2U) {
+    digitalWrite(static_cast<int>(kLocalValveControls[index].pin), open ? HIGH : LOW);
+    g_valveStates[index] = open;
+    return true;
+  }
+  if ((index >= kValveIndexBase) && (index < (kValveIndexBase + kValveLatchCount))) {
+#ifdef MOCK_HARDWARE
+    g_valveStates[index] = open;
+    return true;
+#else
+    const uint32_t payload = open ? BOARD_ACTUATOR_OPEN : BOARD_ACTUATOR_CLOSED;
+    return s_txPolicy.setLatched(s_latchSlots[index - kValveIndexBase], payload);
+#endif
+  }
+  return false;
 }
 
 #ifndef MOCK_HARDWARE
@@ -240,31 +262,6 @@ float s_processPressurePsi(float voltagePt) {
 }
 #endif
 
-bool s_setLocalValveState(uint8_t endpointId, bool open) {
-  const int valveIndex = s_localValveIndexFromEndpoint(endpointId);
-  if (valveIndex < 0) {
-    return false;
-  }
-  digitalWrite(static_cast<int>(kLocalValveControls[valveIndex].pin), open ? HIGH : LOW);
-  g_valveStates[valveIndex] = open;
-
-  AIM_ASSERT(g_valveStates[valveIndex] == open);
-  return true;
-}
-
-bool s_sendFloatTelemetry(AimNetwork& aim, uint8_t endpointId, float value, uint32_t networkNowMs) {
-  AIM_ASSERT(endpointId > 0 && endpointId <= AIM_PKT_TIMED_ENDPOINT_MAX);
-
-  aimPkt pkt = {};
-  pkt.dest = AIM_DEST_COMMS;
-  pkt.type = AIM_TYPE_SENSOR;
-  uint32_t payload = 0U;
-  static_assert(sizeof(payload) == sizeof(value), "float payload packing assumes 32-bit float");
-  std::memcpy(&payload, &value, sizeof(payload));
-  
-  const bool ok = pkt.packData(endpointId, networkNowMs, payload) && aim.sendPkt(pkt);
-  return ok;
-}
 
 static void s_sendAck(uint8_t ackType, uint16_t ackSeq) {
   qlcp_server_payload out = {};
@@ -319,29 +316,59 @@ bool boardInitHardware(void) {
 
   digitalWrite(VPT_EN_PIN, HIGH);
   g_boardHardwareReady = true;
-  g_lastTelemetryMs = millis();
   LOG_INFO("Board hardware initialized");
+
+  s_ptSlots[0]    = s_txPolicy.addPeriodic(BOARD_ENDPOINT_PT1,             AIM_DEST_COMMS, AIM_TYPE_SENSOR,    kTelemetryPeriodMs);
+  s_ptSlots[1]    = s_txPolicy.addPeriodic(BOARD_ENDPOINT_PT2,             AIM_DEST_COMMS, AIM_TYPE_SENSOR,    kTelemetryPeriodMs);
+  s_hbSlot        = s_txPolicy.addPeriodic(BOARD_ENDPOINT_SYSTEM,          AIM_DEST_COMMS, AIM_TYPE_HEARTBEAT, AIM_HEARTBEAT_TX_INTERVAL_DEFAULT_MS);
+  s_latchSlots[0] = s_txPolicy.addLatched (BOARD_ENDPOINT_LOWER_BASE,      AIM_DEST_LPROP, AIM_TYPE_VALVE,     0U);
+  s_latchSlots[1] = s_txPolicy.addLatched (BOARD_ENDPOINT_LOWER_BASE + 1U, AIM_DEST_LPROP, AIM_TYPE_VALVE,     0U);
+  AIM_ASSERT(s_ptSlots[0]    != AimTxPolicy::kInvalidSlot);
+  AIM_ASSERT(s_ptSlots[1]    != AimTxPolicy::kInvalidSlot);
+  AIM_ASSERT(s_hbSlot        != AimTxPolicy::kInvalidSlot);
+  AIM_ASSERT(s_latchSlots[0] != AimTxPolicy::kInvalidSlot);
+  AIM_ASSERT(s_latchSlots[1] != AimTxPolicy::kInvalidSlot);
 
   AIM_ASSERT(g_boardHardwareReady);
   return true;
 }
 
-void boardServiceLocalTelemetry(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& aim) {
+void boardServiceTx(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& aim, uint32_t boardState) {
   AIM_ASSERT(g_boardHardwareReady);
+  static uint32_t lastTelemetryMs = 0U;
 
-  if ((schedulerNowMs - g_lastTelemetryMs) < kTelemetryPeriodMs) {
-    return;
-  }
-  g_lastTelemetryMs = schedulerNowMs;
+  if ((schedulerNowMs - lastTelemetryMs) >= kTelemetryPeriodMs) {
+    lastTelemetryMs = schedulerNowMs;
 
-  for (size_t i = 0; i < (sizeof(kLocalPtSensors) / sizeof(kLocalPtSensors[0])); i++) {
-    const float psi = g_ptValues[i];
-    if (!s_sendFloatTelemetry(aim, kLocalPtSensors[i].endpointId, psi, networkNowMs)) {
-      LOG_ERROR("PT telemetry send failed for endpoint=%u", static_cast<unsigned int>(kLocalPtSensors[i].endpointId));
+#ifdef MOCK_HARDWARE
+    g_ptValues[0] = 50.0f + 10.0f * sin(schedulerNowMs / 1000.0f);
+    g_ptValues[1] = 50.0f + 10.0f * cos(schedulerNowMs / 1000.0f);
+    g_ptValues[2] = 40.0f + 5.0f * sin(schedulerNowMs / 2000.0f);
+    g_ptValues[3] = 40.0f + 5.0f * cos(schedulerNowMs / 2000.0f);
+#else
+    int32_t rawData[kAdcChannelCount] = {0};
+    if (g_adc.readChannels(rawData)) {
+      float volts[kAdcChannelCount] = {0.0f};
+      g_adc.computeVoltages(rawData, volts);
+      for (size_t i = 0; i < (sizeof(kLocalPtSensors) / sizeof(kLocalPtSensors[0])); i++) {
+        const uint8_t channel = kLocalPtSensors[i].adcChannel;
+        g_ptValues[i] = s_processPressurePsi(volts[channel]);
+      }
+    } else {
+      LOG_WARN("ADC sample timeout");
+    }
+#endif
+
+    uint32_t ptPayload = 0U;
+    for (size_t i = 0U; i < (sizeof(kLocalPtSensors) / sizeof(kLocalPtSensors[0])); i++) {
+      static_assert(sizeof(ptPayload) == sizeof(g_ptValues[0]), "float payload packing assumes 32-bit float");
+      std::memcpy(&ptPayload, &g_ptValues[i], sizeof(ptPayload));
+      (void)s_txPolicy.setPeriodic(s_ptSlots[i], ptPayload);  // slots asserted valid at init
     }
   }
 
-  AIM_ASSERT(g_lastTelemetryMs == schedulerNowMs);
+  (void)s_txPolicy.setPeriodic(s_hbSlot, boardState);  // slot asserted valid at init
+  s_txPolicy.service(aim, schedulerNowMs, networkNowMs);
 }
 
 bool boardHandleCanPacket(const aimPkt& pkt, uint32_t networkNowMs, AimNetwork& aim) {
@@ -384,32 +411,6 @@ bool boardHandleCanPacket(const aimPkt& pkt, uint32_t networkNowMs, AimNetwork& 
 
 void boardUpdate(uint32_t schedulerNowMs) {
   AIM_ASSERT(g_boardHardwareReady);
-
-  static uint32_t lastAdcReadMs = 0U;
-  if ((schedulerNowMs - lastAdcReadMs) >= kTelemetryPeriodMs) {
-    lastAdcReadMs = schedulerNowMs;
-
-#ifdef MOCK_HARDWARE
-    g_ptValues[0] = 50.0f + 10.0f * sin(schedulerNowMs / 1000.0f);
-    g_ptValues[1] = 50.0f + 10.0f * cos(schedulerNowMs / 1000.0f);
-    g_ptValues[2] = 40.0f + 5.0f * sin(schedulerNowMs / 2000.0f);
-    g_ptValues[3] = 40.0f + 5.0f * cos(schedulerNowMs / 2000.0f);
-#else
-    int32_t rawData[kAdcChannelCount] = {0};
-    if (g_adc.readChannels(rawData)) {
-      float volts[kAdcChannelCount] = {0.0f};
-      g_adc.computeVoltages(rawData, volts);
-
-      for (size_t i = 0; i < (sizeof(kLocalPtSensors) / sizeof(kLocalPtSensors[0])); i++) {
-        const uint8_t channel = kLocalPtSensors[i].adcChannel;
-        g_ptValues[i] = s_processPressurePsi(volts[channel]);
-      }
-    } else {
-      LOG_WARN("ADC sample timeout");
-    }
-#endif
-  }
-
   // Network/QLCP services run every tick — including in DEBUG_CONSOLE — so
   // server heartbeat ACKs continue while an operator is in the console.
   qlcpNetService(schedulerNowMs);
@@ -451,29 +452,9 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
 
     case QLCP_PT_CONTROL: {
       const uint8_t cmdId = in.payload_data.control.command_id;
-      const uint8_t cmdState = in.payload_data.control.command_state;
-      const bool open = (cmdState == QLCP_CS_OPEN);
-      bool ok = false;
-
-      LOG_INFO("Received control cmdId=%u state=%u", cmdId, cmdState);
-
-      if (cmdId < 2U) {
-        const uint8_t endpoint = (cmdId == 0U) ? BOARD_ENDPOINT_VALVE1 : BOARD_ENDPOINT_VALVE2;
-        ok = s_setLocalValveState(endpoint, open);
-      } else if (cmdId < 4U) {
-#ifdef MOCK_HARDWARE
-        g_valveStates[cmdId] = open;
-        ok = true;
-#else
-        const uint8_t endpoint = (cmdId == 2U) ? BOARD_ENDPOINT_LOWER_BASE : (BOARD_ENDPOINT_LOWER_BASE + 1U);
-        if (s_aimPtr != nullptr) {
-          const uint32_t payload = open ? BOARD_ACTUATOR_OPEN : BOARD_ACTUATOR_CLOSED;
-          ok = s_aimPtr->sendTimedPktEx(endpoint, s_aimPtr->syncedMillis(), payload, AIM_DEST_LPROP, AIM_TYPE_VALVE);
-        }
-#endif
-      }
-
-      if (ok) {
+      const bool open = (in.payload_data.control.command_state == QLCP_CS_OPEN);
+      LOG_INFO("Received control cmdId=%u state=%u", cmdId, in.payload_data.control.command_state);
+      if (s_setValveByIndex(cmdId, open)) {
         s_sendAck(QLCP_PT_CONTROL, in.payload_data.header_only.sequence);
       } else {
         s_sendNack(QLCP_PT_CONTROL, in.payload_data.header_only.sequence, QLCP_ERR_HARDWARE_FAULT);
@@ -657,8 +638,7 @@ static void qlcpTelemetryService(uint32_t nowMs) {
   (void)udp_send_data(&s_netLink, &pkt);  // lossy by design
 }
 
-void boardStartNetwork(AimNetwork& aim) {
-  s_aimPtr = &aim;
+void boardStartNetwork(void) {
   net_link_init(&s_netLink);
   s_netTransition(QLCP_NET_WIFI_START, millis());
 }
@@ -672,41 +652,10 @@ void boardPrintNetworkStatus(Print& out) {
     static_cast<unsigned>(s_streamFrequencyHz));
 }
 
-void boardPrintSensorStatus(Print& out) {
-  out.printf("pt1=%.1f pt2=%.1f pt3=%.1f pt4=%.1f\n", 
-    g_ptValues[0], g_ptValues[1], g_ptValues[2], g_ptValues[3]);
-}
-
 bool boardSetValveStateDirect(uint8_t index, bool open) {
-  if (index >= 4) {
-    return false;
-  }
-
+  if (index >= 4U) { return false; }
   LOG_DEBUG("Direct console actuator override index=%u open=%d", index, open);
-
-  if (index < 2) {
-    uint8_t endpoint = (index == 0) ? BOARD_ENDPOINT_VALVE1 : BOARD_ENDPOINT_VALVE2;
-    return s_setLocalValveState(endpoint, open);
-  } else {
-#ifdef MOCK_HARDWARE
-    g_valveStates[index] = open;
-    return true;
-#else
-    uint8_t endpoint = (index == 2) ? BOARD_ENDPOINT_LOWER_BASE : (BOARD_ENDPOINT_LOWER_BASE + 1);
-    if (s_aimPtr != nullptr) {
-      const uint32_t payload = open ? BOARD_ACTUATOR_OPEN : BOARD_ACTUATOR_CLOSED;
-      const bool ok = s_aimPtr->sendTimedPktEx(endpoint, s_aimPtr->syncedMillis(), payload, AIM_DEST_LPROP, AIM_TYPE_VALVE);
-      return ok;
-    }
-    return false;
-#endif
-  }
+  return s_setValveByIndex(index, open);
 }
 
-bool boardGetValveState(uint8_t index) {
-  if (index < 4) {
-    return g_valveStates[index];
-  }
-  return false;
-}
 #endif

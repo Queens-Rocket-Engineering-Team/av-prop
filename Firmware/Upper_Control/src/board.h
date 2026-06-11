@@ -70,10 +70,17 @@ struct BoardConfig {
 
 extern BoardConfig g_boardConfig;
 
-// Live telemetry state owned by board.cpp: [0..1] local PTs/valves,
-// [2..3] mirrored from Lower Control over CAN.
+// Live state owned by board.cpp.
+// Valves/PTs: [0..1] local (upper), [2..3] mirrored from Lower Control over CAN.
+// Relays: [0] UPPER_V_PT, [1] LOWER_V_PT, [2] LOWER_V_SOL.
+// Hall: [0] UPPER_HALL1, [1] LOWER_HALL1, [2] LOWER_HALL2.
+// VoltageSense: [0] UPPER_24V_SENSE, [1] LOWER_VSOL_SENSE.
+extern bool  g_valveStates[4];
+extern bool  g_24VoltageRelays[3];
 extern float g_ptValues[4];
-extern bool g_valveStates[4];
+extern float g_thermocouple;
+extern float g_hallEffect[3];
+extern float g_24VoltageSense[2];
 
 #define BOARD_CAN_BAUD 500000U
 
@@ -110,7 +117,7 @@ enum BoardActuatorCommand : uint32_t {
 };
 
 bool boardInitHardware(void);
-void boardServiceLocalTelemetry(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& aim);
+void boardServiceTx(uint32_t schedulerNowMs, uint32_t networkNowMs, AimNetwork& aim, uint32_t boardState);
 bool boardHandleCanPacket(const aimPkt& pkt, uint32_t networkNowMs, AimNetwork& aim);
 
 // Add board-specific periodic behavior in boardUpdate().
@@ -118,13 +125,11 @@ void boardUpdate(uint32_t schedulerNowMs);
 
 // Kicks off the WiFi/QLCP connection state machine; the link is serviced
 // non-blockingly from boardUpdate() every loop tick.
-void boardStartNetwork(AimNetwork& aim);
+void boardStartNetwork(void);
 
 #ifndef FLIGHT_BUILD
 void boardPrintNetworkStatus(Print& out);
-void boardPrintSensorStatus(Print& out);
 bool boardSetValveStateDirect(uint8_t index, bool open);
-bool boardGetValveState(uint8_t index);
 #endif
 
 #endif  // BOARD_H

@@ -17,7 +17,6 @@ static constexpr uint32_t kLogIntervalMs = 100U;
 
 struct BoardSchedulerState {
   BoardState value = INIT;
-  uint32_t lastHeartbeatTxMs = 0U;
   uint32_t lastLogMs = 0U;
 };
 
@@ -85,22 +84,6 @@ void serviceCanRx(uint32_t networkNowMs) {
   }
 }
 
-void serviceTx(uint32_t schedulerNowMs, uint32_t networkNowMs) {
-  boardServiceLocalTelemetry(schedulerNowMs, networkNowMs, g_aim);
-  aimPkt pkt = {};
-
-  if ((schedulerNowMs - g_schedulerState.lastHeartbeatTxMs) >= AIM_HEARTBEAT_TX_INTERVAL_DEFAULT_MS) {
-    g_schedulerState.lastHeartbeatTxMs = schedulerNowMs;
-    const uint32_t payload = static_cast<uint32_t>(g_schedulerState.value);
-    pkt.dest = AIM_DEST_COMMS;
-    pkt.type = AIM_TYPE_HEARTBEAT;
-    if (!pkt.packData(BOARD_ENDPOINT_SYSTEM, networkNowMs, payload) && g_aim.sendPkt(pkt)) {
-      LOG_ERROR("Heartbeat TX failed");
-    } else {
-      LOG_DEBUG("Heartbeat TX ok");
-    }
-  }
-}
 
 void runStateMachine(uint32_t schedulerNowMs, uint32_t networkNowMs) {
   AIM_ASSERT(g_schedulerState.value <= FAULT);
@@ -152,7 +135,8 @@ void runStateMachine(uint32_t schedulerNowMs, uint32_t networkNowMs) {
   }
 
   boardUpdate(schedulerNowMs);
-  serviceTx(schedulerNowMs, networkNowMs);
+  boardServiceTx(schedulerNowMs, networkNowMs, g_aim,
+                 static_cast<uint32_t>(g_schedulerState.value));
 }
 
 void setup(void) {
@@ -202,8 +186,7 @@ void setup(void) {
   }
   Serial.println("Console ready. d=enter debug");
 #endif
-  g_schedulerState.lastHeartbeatTxMs = millis();
-  boardStartNetwork(g_aim);
+  boardStartNetwork();
   transitionTo(OPERATIONAL);
 }
 
