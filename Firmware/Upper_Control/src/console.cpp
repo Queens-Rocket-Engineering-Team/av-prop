@@ -13,8 +13,6 @@
 #include <cstring>
 
 static constexpr char     kConsoleEntryKey       = 'd';
-static constexpr char     kConsoleCtrlAEntryChar = '\x01'; // Ctrl-A, guarded by double press.
-static constexpr uint32_t kCtrlAEntryGuardMs     = 750U;
 static constexpr uint8_t  kInputBufLen           = 32U;
 static constexpr uint8_t  kMenuStackDepthMax     = 4U;
 static constexpr uint8_t  kDumpRowsPerTick       = 32U;
@@ -54,9 +52,6 @@ static ConsoleMenu s_menu = CONSOLE_MENU_ROOT;
 static ConsoleMenu s_menuStack[kMenuStackDepthMax];
 static uint8_t     s_menuDepth = 0U;
 
-static BoardConfig s_savedBoardConfig = {};
-static bool        s_configDiscardArmed = false;
-static uint32_t    s_lastCtrlAEntryMs = 0U;
 static uint8_t     s_bootCanId = 0U;            // canId active since boot
 
 static char    s_inputBuf[kInputBufLen];
@@ -70,8 +65,6 @@ static void resetInput(void) {
 static void resetMenu(void) {
   s_menu = CONSOLE_MENU_ROOT;
   s_menuDepth = 0U;
-  s_configDiscardArmed = false;
-  s_lastCtrlAEntryMs = 0U;
   resetInput();
 }
 
@@ -87,7 +80,6 @@ static void pushMenu(ConsoleMenu nextMenu) {
 
 static void popMenu(void) {
   s_menu = (s_menuDepth > 0U) ? s_menuStack[--s_menuDepth] : CONSOLE_MENU_ROOT;
-  s_configDiscardArmed = false;
 }
 
 static void beginInput(ConsoleMenu nextMenu) {
@@ -139,9 +131,6 @@ static bool parseCanId(uint8_t& outCanId) {
 
 static void saveConfig(void) {
   if (s_nodeCfg->save(*s_boardConfig)) {
-    strlcpy(s_savedBoardConfig.boardName, s_boardConfig->boardName, sizeof(s_savedBoardConfig.boardName));
-    s_savedBoardConfig.canId = s_boardConfig->canId;
-    s_configDiscardArmed = false;
     s_serial->println("[OK] config saved");
     if (s_boardConfig->canId != s_bootCanId) {
       s_serial->println("[!] reboot required for CAN ID change");
@@ -187,10 +176,10 @@ static void showMenu(ConsoleMenu menu) {
       s_serial->printf("  name=%s can=%u\n", s_boardConfig->boardName, s_boardConfig->canId);
       break;
     case CONSOLE_MENU_CONFIG_NAME:
-      s_serial->print("new name [b:cancel when empty, ESC/Ctrl-C:cancel]: ");
+      s_serial->print("new name [b:cancel when empty]: ");
       break;
     case CONSOLE_MENU_CONFIG_CAN:
-      s_serial->print("new can [b/ESC/Ctrl-C:cancel]: ");
+      s_serial->print("new can [b:cancel]: ");
       break;
     case CONSOLE_MENU_SENSOR_CONTROL:
       s_serial->printf("DBG > CTL [q:exit b:back] 1:rfr 2:V1[%c] 3:V2[%c] 4:V3[%c] 5:V4[%c]\n",
@@ -203,23 +192,6 @@ static void showMenu(ConsoleMenu menu) {
       s_serial->println("DBG [q:exit b:back] 1:sts 2:log 3:fls 4:net 5:can 6:ctl");
       break;
   }
-}
-
-static bool leaveConfigMenu(void) {
-  if (!((std::strcmp(s_boardConfig->boardName, s_savedBoardConfig.boardName) != 0) ||
-         (s_boardConfig->canId != s_savedBoardConfig.canId))) 
-  {
-    popMenu();
-  } else if (!s_configDiscardArmed) {
-    s_configDiscardArmed = true;
-    s_serial->println("[?] unsaved changes — press 3:sav, or b again to discard");
-  } else {
-    strlcpy(s_boardConfig->boardName, s_savedBoardConfig.boardName, sizeof(s_boardConfig->boardName));
-    s_boardConfig->canId = s_savedBoardConfig.canId;
-    s_serial->println("[--] config changes discarded");
-    popMenu();
-  }
-  return true;
 }
 
 static void appendInputChar(int c) {
@@ -254,7 +226,6 @@ static void finishInput(void) {
     s_boardConfig->canId = canId;
   }
 
-  s_configDiscardArmed = false;
   s_serial->println();
   resetInput();
   popMenu();
@@ -262,9 +233,9 @@ static void finishInput(void) {
 }
 
 static void serviceInput(int c) {
-  const bool cancelKey = (c == 0x03) || (c == 0x1B) ||
-                         ((s_menu == CONSOLE_MENU_CONFIG_CAN) && (c == 'b')) ||
-                         ((s_menu == CONSOLE_MENU_CONFIG_NAME) && (c == 'b') && (s_inputLen == 0U));
+  const bool cancelKey =
+      ((s_menu == CONSOLE_MENU_CONFIG_CAN) && (c == 'b')) ||
+      ((s_menu == CONSOLE_MENU_CONFIG_NAME) && (c == 'b') && (s_inputLen == 0U));
   if (cancelKey) { cancelInput(); return; }
   if ((c == '\r') || (c == '\n')) { finishInput(); return; }
   if ((c == '\b') || (c == 0x7F)) {
@@ -316,8 +287,6 @@ bool consoleInit(Stream& serial,
   s_nodeCfg     = &nodeCfg;
   s_bootCanId   = boardConfig.canId;
   resetMenu();
-  strlcpy(s_savedBoardConfig.boardName, boardConfig.boardName, sizeof(s_savedBoardConfig.boardName));
-  s_savedBoardConfig.canId = boardConfig.canId;
   return true;
 }
 
@@ -327,16 +296,6 @@ ConsoleAction consoleCheckEntry(void) {
     resetMenu();
     showMenu(s_menu);
     return CONSOLE_ACTION_ENTER;
-  }
-  if (c == kConsoleCtrlAEntryChar) {
-    const uint32_t nowMs = static_cast<uint32_t>(millis());
-    if ((s_lastCtrlAEntryMs != 0U) && ((nowMs - s_lastCtrlAEntryMs) <= kCtrlAEntryGuardMs)) {
-      s_lastCtrlAEntryMs = 0U;
-      resetMenu();
-      showMenu(s_menu);
-      return CONSOLE_ACTION_ENTER;
-    }
-    s_lastCtrlAEntryMs = nowMs;
   }
   return CONSOLE_ACTION_NONE;
 }
@@ -430,9 +389,8 @@ ConsoleAction consoleService(uint8_t currentState, uint32_t networkNowMs) {
       break;
 
     case CONSOLE_MENU_CONFIG:
-      if (c != 'b') { s_configDiscardArmed = false; }
       switch (c) {
-        case 'b': leaveConfigMenu(); break;
+        case 'b': popMenu(); break;
         case '1': beginInput(CONSOLE_MENU_CONFIG_NAME); break;
         case '2': beginInput(CONSOLE_MENU_CONFIG_CAN); break;
         case '3': saveConfig(); break;
