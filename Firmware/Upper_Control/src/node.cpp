@@ -17,8 +17,8 @@ extern "C" {
 #include <qlcp_lib.h>
 }
 
-#define WIFI_SSID "TELUS1917"
-#define WIFI_PASS "s24ec9424u"
+#define WIFI_SSID ""
+#define WIFI_PASS ""
 
 static SemaphoreHandle_t s_nodeMutex = nullptr;
 
