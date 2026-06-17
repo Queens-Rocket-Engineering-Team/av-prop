@@ -20,7 +20,7 @@ constexpr uint8_t kAdcClkin = 11;
 constexpr uint8_t kAdcMosi  = 12;
 constexpr uint8_t kAdcMiso  = 13;
 constexpr uint8_t kAdcSclk  = 14;
-constexpr uint8_t kAdcDrdy  = 19;
+constexpr uint8_t kAdcDrdy  = 21;
 
 // --- Hall (I2C, TMAG5273) ---
 constexpr uint8_t kHallScl     = 17;

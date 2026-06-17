@@ -75,6 +75,7 @@ static void hookStatus(Stream& out) {
 
 void setup(void) {
   Serial.begin(node::kSerialBaud);
+  delay(2000U);
   g_logger = &s_log;
   LOG_INFO("Boot board origin=%u", static_cast<unsigned>(aim::Source::Ucm));
   initWatchdog();
