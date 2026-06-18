@@ -39,14 +39,6 @@ void nodeOnRx(const aim::Msg& m, uint32_t nowMs);
 aim::NodeState nodeCurrentState();
 uint16_t nodeErrorBits();
 
-// Read-only accessors for logging, console, and QLCP
-bool nodeGetValveState(uint8_t index);
-bool nodeGet24vFetState(uint8_t index);
-float nodeGetPtValue(uint8_t index);
-float nodeGetHallEffect(uint8_t index);
-float nodeGet24vSense(uint8_t index);
-float nodeGetThermocouple();
-
 #ifndef FLIGHT_BUILD
 #include <aim_console.h>
 const AimConsoleHook* nodeConsoleHooks(uint8_t& count);

@@ -107,7 +107,7 @@ void loop(void) {
   uint32_t nowMs = millis();
   nodeUpdate(nowMs);
   nodeServiceCanTx(g_aim.syncedMillis(), g_aim);
-  g_aim.service(nodeCurrentState(), nodeErrorBits());
+  g_aim.service(nowMs, nodeCurrentState(), nodeErrorBits());
 #ifndef FLIGHT_BUILD
   aimConsoleService();
 #endif

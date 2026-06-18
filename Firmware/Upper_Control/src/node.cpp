@@ -9,6 +9,7 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <logger.h>
+#include <aim_control.h>
 #include <cstring>
 #include <WiFi.h>
 
@@ -37,38 +38,34 @@ struct NodeLock {
 
 static bool s_boardHardwareReady = false;
 
-// Static module-scope state variables replacing the old globals
-static bool  s_valveStates[4]     = {false, false, false, false}; // 0: Vent, 1: N2 Supply, 2: Fill Dump (remote), 3: Main (remote)
-static bool  s_24VoltageFet[3]    = {false, false, false};        // 0: local VPT, 1: remote VPT, 2: remote VSOL
-static float s_ptValues[4]        = {0.0f, 0.0f, 0.0f, 0.0f};     // 0-1: local PT1-2, 2-3: remote PT3-4
+// Seven controls, indexed to match the QLCP control_id / cmdId contract.
+// Two local valves + one local power FET that this board owns, plus four LCM
+// controls driven remotely over CAN.
+enum UcmControl : uint8_t {
+  kCtrlAv204,     // 0: local vent
+  kCtrlAvSpare,   // 1: local, No N2 valve (do not energize)
+  kCtrlAv203,     // 2: remote (LCM)
+  kCtrlAv205,     // 3: remote (LCM)
+  kCtrlPwrPtUcm,  // 4: PwrPtUcm  local  PT power FET
+  kCtrlPwrSolLcm, // 5: PwrSolLcm remote (LCM)
+  kCtrlPwrPtLcm,  // 6: PwrPtLcm  remote (LCM)
+  kCtrlCount
+};
+static aim::Control s_controls[kCtrlCount];
+
+// Four PTs by catalog subject: two sampled locally off the UCM ADC, two received
+// from the LCM over CAN. Order matches the QLCP sensor config (Pt202..PtSpare2).
+enum UcmPt : uint8_t {
+  kPtPt202,     // 0: local  — UCM ADC
+  kPtPtSpare1,  // 1: local  — UCM ADC
+  kPtPt204,     // 2: remote — LCM
+  kPtPtSpare2,  // 3: remote — LCM
+  kPtCount
+};
+static float s_ptValues[kPtCount] = {0.0f, 0.0f, 0.0f, 0.0f};    // PSI
 static float s_hallEffect[3]      = {0.0f, 0.0f, 0.0f};           // 0: local Hall 1, 1-2: remote Hall 2-3
 static float s_24VoltageSense[2]  = {0.0f, 0.0f};                 // 0: local 24V sense, 1: remote VSOL sense
 static float s_thermocouple       = 0.0f;                         // remote TC
-
-// Remote valve command retry queues
-struct ValveCommandState {
-  uint8_t seq = 0U;
-  uint8_t desiredState = 0U;
-  uint32_t lastSentMs = 0U;
-  bool dirty = false;
-  bool awaitingAck = false;
-};
-static ValveCommandState s_valveCmds[4] = {}; // 0: ValveFillDump, 1: ValveMain, 2: PwrSolLcm, 3: PwrPtLcm
-
-// Remote-command slots, indexed 0..3, mapped to their CAN subject.
-constexpr uint8_t kRemoteValveSubjects[4] = {
-    aim::subject::Av203,      // 0: Fill/Dump
-    aim::subject::Av205,      // 1: Main
-    aim::subject::PwrSolLcm,  // 2: LCM solenoid power
-    aim::subject::PwrPtLcm,   // 3: LCM PT power
-};
-
-static uint8_t remoteValveIndex(uint8_t subject) {
-  for (uint8_t i = 0U; i < 4U; i++) {
-    if (kRemoteValveSubjects[i] == subject) return i;
-  }
-  return 0xFF;
-}
 
 static uint32_t s_lowerLastRxMs = 0U;
 static bool     s_lowerLinkUp   = false;
@@ -81,33 +78,15 @@ constexpr uint32_t kAdcClockHz = 8192000U;
 constexpr uint8_t kAdcClockDuty = 1U;
 constexpr uint32_t kTelemetryPeriodMs = 100U;
 constexpr uint32_t kLowerStaleTimeoutMs = 1000U;
-constexpr uint32_t kValveEchoTimeoutMs = 500U;
 
 constexpr size_t kAdcChannelCount = 4U;
-constexpr uint8_t kValveIndexBase  = 2U;
-constexpr uint8_t kValveLatchCount = 2U;
 
 constexpr float kPtShuntResistanceOhms = 62.0f;
 constexpr float kPtMaxPsi = 100.0f;
 
-struct BoardSensorMapping {
-  uint8_t adcChannel;
-};
-
-struct BoardControlMapping {
-  uint8_t pin;
-  bool defaultOpen;
-};
-
-constexpr BoardSensorMapping kLocalPtSensors[] = {
-    {0U},
-    {1U},
-};
-
-constexpr BoardControlMapping kLocalValveControls[] = {
-    {pins::kSol1En, true},   // Vent: Normally Open (defaultOpen = true)
-    {pins::kSol2En, false},  // N2: Normally Closed (defaultOpen = false)
-};
+// ADC channel for each UCM-local PT.
+constexpr uint8_t kAdcChPt202    = 0U;
+constexpr uint8_t kAdcChPtSpare1 = 1U;
 
 constexpr char kBoardQlcpConfigJson[] = R"json({
   "device_name": "PEGASUS-UPPER",
@@ -261,47 +240,15 @@ static void netFail(uint32_t nowMs) {
 static void qlcpNetService(uint32_t nowMs);
 static void qlcpTelemetryService(uint32_t nowMs);
 
-// Schedules a command to be sent to remote valves
-static void nodeCommandRemoteValve(uint8_t subject, bool open) {
-  const uint8_t idx = remoteValveIndex(subject);
-  if (idx == 0xFF) return;
-
-  uint8_t nextState = open ? 1U : 0U;
-  if (s_valveCmds[idx].dirty || s_valveCmds[idx].desiredState != nextState || !s_valveCmds[idx].awaitingAck) {
-    s_valveCmds[idx].desiredState = nextState;
-    s_valveCmds[idx].seq++;
-    s_valveCmds[idx].dirty = true;
-    s_valveCmds[idx].awaitingAck = true;
+// Command a control by its QLCP/cmdId index. Local controls actuate immediately;
+// remote controls queue a Cmd that nodeServiceCanTx sends to the LCM.
+static bool setControlByIndex(uint8_t index, bool open) {
+  if (index >= kCtrlCount) {
+    return false;
   }
-}
-
-static bool setValveByIndex(uint8_t index, bool open) {
   NodeLock lock;
-  if (index < 2U) {
-    const bool defaultOpen = kLocalValveControls[index].defaultOpen;
-    const bool pinState = open != defaultOpen; // Energize if we want physical state opposite to defaultOpen
-    digitalWrite(static_cast<int>(kLocalValveControls[index].pin), pinState ? HIGH : LOW);
-    s_valveStates[index] = open;
-    return true;
-  }
-  if ((index >= kValveIndexBase) && (index < (kValveIndexBase + kValveLatchCount))) {
-    nodeCommandRemoteValve((index == 2U) ? aim::subject::Av203 : aim::subject::Av205, open);
-    return true;
-  }
-  if (index == 4U) {
-    digitalWrite(pins::kVptEn, open ? HIGH : LOW);
-    s_24VoltageFet[0] = open;
-    return true;
-  }
-  if (index == 5U) {
-    nodeCommandRemoteValve(aim::subject::PwrSolLcm, open);
-    return true;
-  }
-  if (index == 6U) {
-    nodeCommandRemoteValve(aim::subject::PwrPtLcm, open);
-    return true;
-  }
-  return false;
+  controlSet(s_controls[index], open);
+  return true;
 }
 
 #ifndef MOCK_HARDWARE
@@ -370,7 +317,7 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
       const uint8_t cmdId = in.payload_data.control.command_id;
       const bool open = (in.payload_data.control.command_state == QLCP_CS_OPEN);
       LOG_INFO("Received control cmdId=%u state=%u", cmdId, in.payload_data.control.command_state);
-      if (setValveByIndex(cmdId, open)) {
+      if (setControlByIndex(cmdId, open)) {
         sendAck(QLCP_PT_CONTROL, in.payload_data.header_only.sequence);
       } else {
         sendNack(QLCP_PT_CONTROL, in.payload_data.header_only.sequence, QLCP_ERR_HARDWARE_FAULT);
@@ -383,15 +330,7 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
         NodeLock lock;
         for (uint8_t i = 0U; i < kQlcpControlCount; i++) {
           controlData[i].control_id = i;
-          if (i < 4U) {
-            controlData[i].control_state = s_valveStates[i] ? QLCP_CS_OPEN : QLCP_CS_CLOSED;
-          } else if (i == 4U) {
-            controlData[i].control_state = s_24VoltageFet[0] ? QLCP_CS_OPEN : QLCP_CS_CLOSED;
-          } else if (i == 5U) {
-            controlData[i].control_state = s_24VoltageFet[2] ? QLCP_CS_OPEN : QLCP_CS_CLOSED;
-          } else if (i == 6U) {
-            controlData[i].control_state = s_24VoltageFet[1] ? QLCP_CS_OPEN : QLCP_CS_CLOSED;
-          }
+          controlData[i].control_state = controlGet(s_controls[i]) ? QLCP_CS_OPEN : QLCP_CS_CLOSED;
         }
       }
       qlcp_server_payload out = {};
@@ -534,7 +473,7 @@ static void qlcpTelemetryService(uint32_t nowMs) {
   qlcp_sensor_data readings[kQlcpSensorCount] = {};
   {
     NodeLock lock;
-    for (uint8_t i = 0U; i < 4; i++) {
+    for (uint8_t i = 0U; i < kPtCount; i++) {
       readings[i].sensor_id = i;
       readings[i].unit = QLCP_UNIT_PSI;
       readings[i].value = s_ptValues[i];
@@ -588,15 +527,15 @@ void nodeInit(uint32_t nowMs) {
     digitalWrite(indicatorLeds[i], LOW);
   }
 
-  pinMode(pins::kVptEn, OUTPUT);
-  digitalWrite(pins::kVptEn, LOW);
-
-  for (size_t i = 0; i < (sizeof(kLocalValveControls) / sizeof(kLocalValveControls[0])); i++) {
-    pinMode(static_cast<int>(kLocalValveControls[i].pin), OUTPUT);
-    // Safe/Default boot state: De-energized (LOW)
-    digitalWrite(static_cast<int>(kLocalValveControls[i].pin), LOW);
-    s_valveStates[i] = kLocalValveControls[i].defaultOpen;
-  }
+  // Controls. openLevel = the GPIO level that means logical-open:
+  // All local controls boot de-energized (safe); remote controls assume the LCM's
+  // own boot defaults. The local PT rail is switched on once hardware is ready.
+  controlInitLocal(s_controls[kCtrlAv204], aim::subject::Av204, pins::kSol1En, LOW);
+  controlInitLocal(s_controls[kCtrlPwrPtUcm], aim::subject::PwrPtUcm, pins::kVptEn,  HIGH);
+  controlInitRemote(s_controls[kCtrlAv203], aim::subject::Av203, true);
+  controlInitRemote(s_controls[kCtrlAv205], aim::subject::Av205, false);
+  controlInitRemote(s_controls[kCtrlPwrSolLcm], aim::subject::PwrSolLcm, false);
+  controlInitRemote(s_controls[kCtrlPwrPtLcm], aim::subject::PwrPtLcm, true);
 
   ledcSetup(kAdcClockChannel, kAdcClockHz, kAdcClockDuty);
   ledcAttachPin(pins::kAdcClkin, kAdcClockChannel);
@@ -604,13 +543,11 @@ void nodeInit(uint32_t nowMs) {
 
   SPI.begin(pins::kAdcSclk, pins::kAdcMiso, pins::kAdcMosi, -1);
   s_adc.init();
-  Wire.begin(pins::kHallSda, pins::kHallScl);
-  s_hall.init();
+  // NOTE: add back after fixing hall library
+//  Wire.begin(pins::kHallSda, pins::kHallScl);
+//  s_hall.init();
 
-  digitalWrite(pins::kVptEn, HIGH);
-  s_24VoltageFet[0] = true;
-  s_24VoltageFet[1] = true; // remote LCM VPT defaults ON
-  s_valveCmds[3].desiredState = 1U; // remote LCM VPT command defaults ON
+  controlSet(s_controls[kCtrlPwrPtUcm], true); // local PT power on once hardware is up
   s_boardHardwareReady = true;
 
   // Start WiFi/QLCP state machine
@@ -671,34 +608,33 @@ void nodeServiceCanTx(uint32_t schedulerNowMs, AimNetwork& aim) {
 #ifdef MOCK_HARDWARE
     {
       NodeLock lock;
-      s_ptValues[0] = 50.0f + 10.0f * sin(schedulerNowMs / 1000.0f);
-      s_ptValues[1] = 50.0f + 10.0f * cos(schedulerNowMs / 1000.0f);
-      s_ptValues[2] = 40.0f + 5.0f * sin(schedulerNowMs / 2000.0f);
-      s_ptValues[3] = 40.0f + 5.0f * cos(schedulerNowMs / 2000.0f);
+      s_ptValues[kPtPt202]    = 50.0f + 10.0f * sin(schedulerNowMs / 1000.0f);
+      s_ptValues[kPtPtSpare1] = 50.0f + 10.0f * cos(schedulerNowMs / 1000.0f);
+      s_ptValues[kPtPt204]    = 40.0f + 5.0f * sin(schedulerNowMs / 2000.0f);
+      s_ptValues[kPtPtSpare2] = 40.0f + 5.0f * cos(schedulerNowMs / 2000.0f);
       s_hallEffect[0] = 10.0f * sinf(schedulerNowMs / 500.0f);
     }
 #else
-    float newPtValues[2] = {0.0f, 0.0f};
+    float ptPt202 = 0.0f;
+    float ptPtSpare1 = 0.0f;
     float newHallValue = 0.0f;
     int32_t rawData[kAdcChannelCount] = {0};
     if (s_adc.readChannels(rawData)) {
       float volts[kAdcChannelCount] = {0.0f};
       s_adc.computeVoltages(rawData, volts);
-      for (size_t i = 0; i < (sizeof(kLocalPtSensors) / sizeof(kLocalPtSensors[0])); i++) {
-        const uint8_t channel = kLocalPtSensors[i].adcChannel;
-        newPtValues[i] = processPressurePsi(volts[channel]);
-      }
+      ptPt202    = processPressurePsi(volts[kAdcChPt202]);
+      ptPtSpare1 = processPressurePsi(volts[kAdcChPtSpare1]);
     } else {
       LOG_WARN("ADC sample timeout");
     }
-    float flux[3] = {0.0f};
-    (void)s_hall.getAllFlux(flux);
-    newHallValue = flux[0];
+
+  // NOTE: add back after fixing hall library
+//    newHallValue = s_hall.getFluxMagnitude();
 
     {
       NodeLock lock;
-      s_ptValues[0] = newPtValues[0];
-      s_ptValues[1] = newPtValues[1];
+      s_ptValues[kPtPt202]    = ptPt202;
+      s_ptValues[kPtPtSpare1] = ptPtSpare1;
       s_hallEffect[0] = newHallValue;
     }
 #endif
@@ -714,7 +650,7 @@ void nodeServiceCanTx(uint32_t schedulerNowMs, AimNetwork& aim) {
     pt1Msg.subject = aim::subject::Pt202;
     {
       NodeLock lock;
-      pt1Msg.setSensorValue(static_cast<int32_t>(s_ptValues[0] * 100.0f));
+      pt1Msg.setSensorValue(static_cast<int32_t>(s_ptValues[kPtPt202] * 100.0f));
     }
     (void)aim.send(pt1Msg);
 
@@ -723,7 +659,7 @@ void nodeServiceCanTx(uint32_t schedulerNowMs, AimNetwork& aim) {
     pt2Msg.subject = aim::subject::PtSpare1;
     {
       NodeLock lock;
-      pt2Msg.setSensorValue(static_cast<int32_t>(s_ptValues[1] * 100.0f));
+      pt2Msg.setSensorValue(static_cast<int32_t>(s_ptValues[kPtPtSpare1] * 100.0f));
     }
     (void)aim.send(pt2Msg);
 
@@ -736,28 +672,16 @@ void nodeServiceCanTx(uint32_t schedulerNowMs, AimNetwork& aim) {
     }
     (void)aim.send(solMsg);
 
-    // Publish local valve state packets (ValveVent & ValveN2Supply)
-    aim::Msg ventMsg = {};
-    ventMsg.cls = aim::Class::State;
-    ventMsg.subject = aim::subject::Av204;
-    {
-      NodeLock lock;
-      ventMsg.b[0] = s_valveStates[0] ? 1U : 0U; // commanded
-      ventMsg.b[1] = s_valveStates[0] ? 1U : 0U; // energized
+    // Publish local valve STATE (Av204 Vent, AvSpare N2).
+    for (uint8_t i = kCtrlAv204; i <= kCtrlAvSpare; i++) {
+      aim::Msg sm = {};
+      {
+        NodeLock lock;
+        controlBuildState(s_controls[i], sm);
+      }
+      sm.b[2] = static_cast<uint8_t>(aim::ValveState::Unknown); // hall (not sensed)
+      (void)aim.send(sm);
     }
-    ventMsg.b[2] = static_cast<uint8_t>(aim::ValveState::Unknown); // hall
-    (void)aim.send(ventMsg);
-
-    aim::Msg n2Msg = {};
-    n2Msg.cls = aim::Class::State;
-    n2Msg.subject = aim::subject::AvSpare;
-    {
-      NodeLock lock;
-      n2Msg.b[0] = s_valveStates[1] ? 1U : 0U;
-      n2Msg.b[1] = s_valveStates[1] ? 1U : 0U;
-    }
-    n2Msg.b[2] = static_cast<uint8_t>(aim::ValveState::Unknown);
-    (void)aim.send(n2Msg);
   }
 
   // Periodic staleness check for LCM link
@@ -774,25 +698,12 @@ void nodeServiceCanTx(uint32_t schedulerNowMs, AimNetwork& aim) {
     }
   }
 
-  // Remote valve command retry queue
+  // Service control CAN traffic: remote Cmd (re)sends. Local controls own no
+  // commanded subject here, so their service is a no-op.
   {
     NodeLock lock;
-    for (uint8_t i = 0U; i < 4U; i++) {
-      const bool resend = s_valveCmds[i].awaitingAck &&
-                          (schedulerNowMs - s_valveCmds[i].lastSentMs >= kValveEchoTimeoutMs);
-      if (!s_valveCmds[i].dirty && !resend) {
-        continue;
-      }
-
-      aim::Msg m = {};
-      m.cls = aim::Class::Cmd;
-      m.subject = kRemoteValveSubjects[i];
-      m.b[0] = s_valveCmds[i].seq;
-      m.b[1] = s_valveCmds[i].desiredState;
-      if (aim.send(m)) {
-        s_valveCmds[i].dirty = false;
-        s_valveCmds[i].lastSentMs = schedulerNowMs;
-      }
+    for (uint8_t i = 0U; i < kCtrlCount; i++) {
+      controlServiceTx(s_controls[i], schedulerNowMs, aim);
     }
   }
 }
@@ -805,33 +716,20 @@ void nodeOnRx(const aim::Msg& m, uint32_t nowMs) {
   NodeLock lock;
   s_lowerLastRxMs = nowMs;
 
-  if (m.cls == aim::Class::Ack) {
-    const uint8_t idx = remoteValveIndex(m.subject);
-    if (idx != 0xFF && m.b[0] == s_valveCmds[idx].seq) {
-      s_valveCmds[idx].awaitingAck = false;
-      LOG_INFO("ACK received from LCM: subject=%u result=%u", m.subject, m.b[1]);
-    }
-  } else if (m.cls == aim::Class::State) {
-    bool state = (m.b[0] == 1);
-    if (m.subject == aim::subject::Av203) {
-      s_valveStates[2] = state;
-      s_24VoltageFet[2] = (m.b[1] == 1); // energized
-    } else if (m.subject == aim::subject::Av205) {
-      s_valveStates[3] = state;
-    } else if (m.subject == aim::subject::PwrPtLcm) {
-      s_24VoltageFet[1] = state;
-    } else if (m.subject == aim::subject::PwrSolLcm) {
-      s_24VoltageFet[2] = state;
+  if (m.cls == aim::Class::Ack || m.cls == aim::Class::State) {
+    // Route the LCM's Ack/State to whichever remote control owns the subject.
+    for (uint8_t i = 0U; i < kCtrlCount; i++) {
+      (void)controlOnRx(s_controls[i], m);
     }
   } else if (m.cls == aim::Class::Sensor) {
     float val = static_cast<float>(m.sensorValue());
 
     switch (m.subject) {
       case aim::subject::Pt204:
-        s_ptValues[2] = val / 100.0f; // scaled PSI
+        s_ptValues[kPtPt204] = val / 100.0f; // scaled PSI
         break;
       case aim::subject::PtSpare2:
-        s_ptValues[3] = val / 100.0f; // scaled PSI
+        s_ptValues[kPtPtSpare2] = val / 100.0f; // scaled PSI
         break;
       case aim::subject::TcLowerValve:
         s_thermocouple = val / 100.0f; // scaled degC
@@ -853,59 +751,29 @@ uint16_t nodeErrorBits() {
   return 0U;
 }
 
-// Accessors implementation
-bool nodeGetValveState(uint8_t index) {
-  NodeLock lock;
-  if (index >= 4U) return false;
-  return s_valveStates[index];
-}
-
-bool nodeGet24vFetState(uint8_t index) {
-  NodeLock lock;
-  if (index >= 3U) return false;
-  return s_24VoltageFet[index];
-}
-
-float nodeGetPtValue(uint8_t index) {
-  NodeLock lock;
-  if (index >= 4U) return 0.0f;
-  return s_ptValues[index];
-}
-
-float nodeGetHallEffect(uint8_t index) {
-  NodeLock lock;
-  if (index >= 3U) return 0.0f;
-  return s_hallEffect[index];
-}
-
-float nodeGet24vSense(uint8_t index) {
-  NodeLock lock;
-  if (index >= 2U) return 0.0f;
-  return s_24VoltageSense[index];
-}
-
-float nodeGetThermocouple() {
-  NodeLock lock;
-  return s_thermocouple;
-}
-
 #ifndef FLIGHT_BUILD
+// "UNKNOWN" until the LCM's first State frame confirms a remote control.
+static const char* controlStr(const aim::Control& c, const char* hi, const char* lo) {
+  if (!controlConfirmed(c)) return "UNKNOWN";
+  return controlGet(c) ? hi : lo;
+}
+
 static void hookStatusSnapshot(Stream& out) {
   NodeLock lock;
-  out.printf("V_VENT=%s\n", s_valveStates[0] ? "OPEN" : "CLOSED");
-  out.printf("V_N2=%s\n", s_valveStates[1] ? "OPEN" : "CLOSED");
-  out.printf("V_FILL_DUMP=%s\n", s_valveStates[2] ? "OPEN" : "CLOSED");
-  out.printf("V_MAIN=%s\n", s_valveStates[3] ? "OPEN" : "CLOSED");
-  out.printf("PT1 (Run Tank)=%.2f PSI\n", s_ptValues[0]);
-  out.printf("PT2 (Pre Injector)=%.2f PSI\n", s_ptValues[1]);
-  out.printf("PT3 (Chamber)=%.2f PSI\n", s_ptValues[2]);
-  out.printf("PT4=%.2f PSI\n", s_ptValues[3]);
-  out.printf("TC=%.2f C\n", s_thermocouple);
+  out.printf("AV204_VENT=%s\n", controlStr(s_controls[kCtrlAv204], "OPEN", "CLOSED"));
+  out.printf("AVSpare=%s\n", controlStr(s_controls[kCtrlAvSpare], "OPEN", "CLOSED"));
+  out.printf("AV203_FILL_DUMP=%s\n", controlStr(s_controls[kCtrlAv203], "OPEN", "CLOSED"));
+  out.printf("AV205_MAIN=%s\n", controlStr(s_controls[kCtrlAv205], "OPEN", "CLOSED"));
+  out.printf("Pt202 (Run Tank, local)=%.2f PSI\n", s_ptValues[kPtPt202]);
+  out.printf("PtSpare1 (local)=%.2f PSI\n", s_ptValues[kPtPtSpare1]);
+  out.printf("Pt204 (Chamber, remote)=%.2f PSI\n", s_ptValues[kPtPt204]);
+  out.printf("PtSpare2 (remote)=%.2f PSI\n", s_ptValues[kPtPtSpare2]);
+  out.printf("TC (remote)=%.2f C\n", s_thermocouple);
   out.printf("24V (Local)=%.2f V\n", s_24VoltageSense[0]);
   out.printf("24V (Remote)=%.2f V\n", s_24VoltageSense[1]);
-  out.printf("VPT FET=%s\n", s_24VoltageFet[0] ? "ON" : "OFF");
-  out.printf("Remote VPT FET=%s\n", s_24VoltageFet[1] ? "ON" : "OFF");
-  out.printf("Remote VSOL FET=%s\n", s_24VoltageFet[2] ? "ON" : "OFF");
+  out.printf("VPT FET=%s\n", controlStr(s_controls[kCtrlPwrPtUcm], "ON", "OFF"));
+  out.printf("Remote VPT FET=%s\n", controlStr(s_controls[kCtrlPwrPtLcm], "ON", "OFF"));
+  out.printf("Remote VSOL FET=%s\n", controlStr(s_controls[kCtrlPwrSolLcm], "ON", "OFF"));
 }
 
 static void hookNetworkStatus(Stream& out) {
@@ -921,25 +789,25 @@ static void hookNetworkStatus(Stream& out) {
 static void hookSetValve(Stream& out) {
   int index = -1;
   int state = -1;
-  if (out.read() == ' ' && (index = out.read()) >= '0' && index <= '4') {
+  if (out.read() == ' ' && (index = out.read()) >= '0' && index <= '6') {
     if (out.read() == ' ' && (state = out.read()) >= '0' && state <= '1') {
-      uint8_t valveIdx = index - '0';
+      uint8_t ctrlIdx = index - '0';
       bool open = (state == '1');
-      if (setValveByIndex(valveIdx, open)) {
-        out.printf("Set valve %d to %d\n", valveIdx, open);
+      if (setControlByIndex(ctrlIdx, open)) {
+        out.printf("Set control %d to %d\n", ctrlIdx, open);
       } else {
-        out.println("Set valve failed");
+        out.println("Set control failed");
       }
       return;
     }
   }
-  out.println("Invalid command format. Use: v <index 0-4> <state 0-1>");
+  out.println("Invalid command format. Use: v <index 0-6> <state 0-1>");
 }
 
 static const AimConsoleHook s_consoleHooks[] = {
   {'p', "status snapshot", hookStatusSnapshot},
   {'n', "network status", hookNetworkStatus},
-  {'v', "set valve (v <idx> <0|1>)", hookSetValve},
+  {'v', "set control (v <idx 0-6> <0|1>)", hookSetValve},
 };
 
 const AimConsoleHook* nodeConsoleHooks(uint8_t& count) {

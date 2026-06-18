@@ -5,6 +5,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <prop_testing.h>
 #include <aim_job.h>
+#include <aim_control.h>
 
 static ADS131M04 s_adc(pins::kAdcCs, pins::kAdcDrdy, &SPI);
 static TwoWire s_wire1(pins::kHallSda1, pins::kHallScl1);
@@ -17,10 +18,9 @@ static Adafruit_NeoPixel s_rgbLeds(1U, pins::kRgbData, NEO_GRB + NEO_KHZ800);
 static bool s_adcPolling = true;
 static bool s_hallPolling = true;
 
-static bool s_valve1State = true;  // Av203: default open (de-energized)
-static bool s_valve2State = false; // Av205: default closed (de-energized)
-static bool s_vsolState   = false; // PwrSolLcm: default off (de-energized)
-static bool s_vptState    = true;  // PwrPtLcm: default on (de-energized)
+// LCM owns four local controls. Index order is fixed for the loops below.
+enum LcmControl : uint8_t { kCtrlAv203, kCtrlAv205, kCtrlPwrSolLcm, kCtrlPwrPtLcm, kCtrlCount };
+static aim::Control s_controls[kCtrlCount];
 
 static aim::Job s_adcJob{500U};
 static aim::Job s_hallJob{250U};
@@ -28,12 +28,13 @@ static aim::Job s_voltSenseJob{500U};
 static aim::Job s_broadcastJob{500U};
 static aim::Job s_ledJob{30U};
 
-static bool     s_pendingAckDirty = false;
-static uint8_t  s_pendingAckSubject = 0U;
-static uint8_t  s_pendingAckSeq = 0U;
-
 // VSOL sense: 12-bit ADC over 3.3 V ref through an 11:1 divider.
 constexpr float kVoltSenseScale = (3.3f / 4095.0f) * 11.0f;
+
+// ADC channel for each LCM-local sensor (both PTs are LCM-owned per the catalog).
+constexpr uint8_t kAdcChPt204    = 0U;
+constexpr uint8_t kAdcChPtSpare2 = 1U;
+constexpr uint8_t kAdcChTc       = 2U;
 
 void nodeInit(uint32_t nowMs) {
   (void)nowMs;
@@ -56,15 +57,17 @@ void nodeInit(uint32_t nowMs) {
     LOG_ERROR("Hall sensor 2 init failed");
   }
 
-  pinMode(pins::kVptEn, OUTPUT);
-  pinMode(pins::kVsolEn, OUTPUT);
-  pinMode(pins::kSol1En, OUTPUT);
-  pinMode(pins::kSol2En, OUTPUT);
+  // Local controls. openLevel = the GPIO level that means logical-open:
+  //   Av203 NO valve → LOW (open de-energized);  Av205 NC valve → HIGH;
+  //   power rails → HIGH (on). All boot de-energized; VPT is switched on below.
+  controlInitLocal(s_controls[kCtrlAv203], aim::subject::Av203,     pins::kSol1En, LOW);
+  controlInitLocal(s_controls[kCtrlAv205], aim::subject::Av205,     pins::kSol2En, HIGH);
+  controlInitLocal(s_controls[kCtrlPwrSolLcm],  aim::subject::PwrSolLcm, pins::kVsolEn, HIGH);
+  controlInitLocal(s_controls[kCtrlPwrPtLcm],   aim::subject::PwrPtLcm,  pins::kVptEn,  HIGH);
 
-  enablePower(pins::kVptEn); // default on
-  disablePower(pins::kVsolEn); // default off
-  disableValve(pins::kSol1En); // default open
-  disableValve(pins::kSol2En); // default closed
+  // PT power rail rests on; switch it up once configured (brief inrush settle).
+  controlSet(s_controls[kCtrlPwrPtLcm], true);
+  delay(100);
 
   analogReadResolution(12);
 
@@ -85,21 +88,21 @@ static void pollADC(uint32_t nowMs, AimNetwork& aim) {
   }
   s_adc.computeVoltages(raw, volts);
 
-  const float psi1 = processPT(volts[0]);
-  const float psi2 = processPT(volts[1]);
-  const float tempC = processTC(volts[2], pins::kCjcSense);
+  const float pt204    = processPT(volts[kAdcChPt204]);
+  const float ptSpare2 = processPT(volts[kAdcChPtSpare2]);
+  const float tempC    = processTC(volts[kAdcChTc], pins::kCjcSense);
 
   // CAN telemetry broadcasts
   aim::Msg pt1Msg = {};
   pt1Msg.cls = aim::Class::Sensor;
   pt1Msg.subject = aim::subject::Pt204;
-  pt1Msg.setSensorValue(static_cast<int32_t>(psi1 * 100.0f));
+  pt1Msg.setSensorValue(static_cast<int32_t>(pt204 * 100.0f));
   (void)aim.send(pt1Msg);
 
   aim::Msg pt2Msg = {};
   pt2Msg.cls = aim::Class::Sensor;
   pt2Msg.subject = aim::subject::PtSpare2;
-  pt2Msg.setSensorValue(static_cast<int32_t>(psi2 * 100.0f));
+  pt2Msg.setSensorValue(static_cast<int32_t>(ptSpare2 * 100.0f));
   (void)aim.send(pt2Msg);
 
   aim::Msg tcMsg = {};
@@ -114,9 +117,8 @@ static void pollHall(uint32_t nowMs) {
     return;
   }
 
-  float a1[3], a2[3];
-  (void)s_hall1.getAllFlux(a1);
-  (void)s_hall2.getAllFlux(a2);
+  (void)s_hall1.getFluxMagnitude();
+  (void)s_hall2.getFluxMagnitude();
 }
 
 static void pollVoltSense(uint32_t nowMs, AimNetwork& aim) {
@@ -139,30 +141,11 @@ static void broadcastStates(uint32_t nowMs, AimNetwork& aim) {
     return;
   }
 
-  aim::Msg m1 = {};
-  m1.cls = aim::Class::State;
-  m1.subject = aim::subject::Av203;
-  m1.b[0] = s_valve1State ? 1U : 0U;
-  m1.b[1] = s_vsolState ? 1U : 0U;
-  (void)aim.send(m1);
-
-  aim::Msg m2 = {};
-  m2.cls = aim::Class::State;
-  m2.subject = aim::subject::Av205;
-  m2.b[0] = s_valve2State ? 1U : 0U;
-  (void)aim.send(m2);
-
-  aim::Msg m3 = {};
-  m3.cls = aim::Class::State;
-  m3.subject = aim::subject::PwrSolLcm;
-  m3.b[0] = s_vsolState ? 1U : 0U;
-  (void)aim.send(m3);
-
-  aim::Msg m4 = {};
-  m4.cls = aim::Class::State;
-  m4.subject = aim::subject::PwrPtLcm;
-  m4.b[0] = s_vptState ? 1U : 0U;
-  (void)aim.send(m4);
+  for (uint8_t i = 0U; i < kCtrlCount; i++) {
+    aim::Msg m = {};
+    controlBuildState(s_controls[i], m);
+    (void)aim.send(m);
+  }
 }
 
 void nodeUpdate(uint32_t nowMs) {
@@ -179,16 +162,9 @@ void nodeUpdate(uint32_t nowMs) {
 }
 
 void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
-  // Process pending ACK
-  if (s_pendingAckDirty) {
-    aim::Msg ack = {};
-    ack.cls = aim::Class::Ack;
-    ack.subject = s_pendingAckSubject;
-    ack.b[0] = s_pendingAckSeq;
-    ack.b[1] = 0; // Accepted
-    if (aim.send(ack)) {
-      s_pendingAckDirty = false;
-    }
+  // Emit any pending control ACKs.
+  for (uint8_t i = 0U; i < kCtrlCount; i++) {
+    controlServiceTx(s_controls[i], nowMs, aim);
   }
 
   pollADC(nowMs, aim);
@@ -199,50 +175,12 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
 void nodeOnRx(const aim::Msg& m, uint32_t nowMs) {
   (void)nowMs;
 
-  if (m.cls == aim::Class::Cmd) {
-    bool open = (m.b[1] == 1);
-    bool actuate = false;
-
-    if (m.subject == aim::subject::Av203) {
-      s_valve1State = open;
-      if (open) {
-        disableValve(pins::kSol1En);
-      } else {
-        enableValve(pins::kSol1En);
-      }
-      actuate = true;
-    } else if (m.subject == aim::subject::Av205) {
-      s_valve2State = open;
-      if (open) {
-        enableValve(pins::kSol2En);
-      } else {
-        disableValve(pins::kSol2En);
-      }
-      actuate = true;
-    } else if (m.subject == aim::subject::PwrSolLcm) {
-      s_vsolState = open;
-      if (open) {
-        enablePower(pins::kVsolEn);
-      } else {
-        disablePower(pins::kVsolEn);
-      }
-      actuate = true;
-    } else if (m.subject == aim::subject::PwrPtLcm) {
-      s_vptState = open;
-      if (open) {
-        enablePower(pins::kVptEn);
-      } else {
-        disablePower(pins::kVptEn);
-      }
-      actuate = true;
-    }
-
-    if (actuate) {
-      s_pendingAckSubject = m.subject;
-      s_pendingAckSeq = m.b[0];
-      s_pendingAckDirty = true;
-      s_broadcastJob.lastMs = 0U; // force state broadcast in next nodeServiceCanTx
-    }
+  bool actuated = false;
+  for (uint8_t i = 0U; i < kCtrlCount; i++) {
+    actuated |= controlOnRx(s_controls[i], m);
+  }
+  if (actuated) {
+    s_broadcastJob.lastMs = 0U; // force state broadcast in next nodeServiceCanTx
   }
 }
 
@@ -280,9 +218,9 @@ static void hookTelemetryDump(Stream& out) {
   float volts[4];
   if (s_adc.readChannels(raw)) {
     s_adc.computeVoltages(raw, volts);
-    out.printf("PT1: %.1f PSI (V=%.4f)\n", processPT(volts[0]), volts[0]);
-    out.printf("PT2: %.1f PSI (V=%.4f)\n", processPT(volts[1]), volts[1]);
-    out.printf("TC: %.1f C\n", processTC(volts[2], pins::kCjcSense));
+    out.printf("Pt204: %.1f PSI (V=%.4f)\n", processPT(volts[kAdcChPt204]), volts[kAdcChPt204]);
+    out.printf("PtSpare2: %.1f PSI (V=%.4f)\n", processPT(volts[kAdcChPtSpare2]), volts[kAdcChPtSpare2]);
+    out.printf("TcLowerValve: %.1f C\n", processTC(volts[kAdcChTc], pins::kCjcSense));
   } else {
     out.println("ADC read error");
   }

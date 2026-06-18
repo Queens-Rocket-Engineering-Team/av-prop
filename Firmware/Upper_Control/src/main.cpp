@@ -101,7 +101,7 @@ void setup(void) {
   uint8_t nodeHookCount = 0U;
   const AimConsoleHook* nodeHooks = nodeConsoleHooks(nodeHookCount);
 
-  AimConsoleHook combinedHooks[8];
+  static AimConsoleHook combinedHooks[8];
   uint8_t totalHooks = 0;
   combinedHooks[totalHooks++] = {'s', "status", hookStatus};
   for (uint8_t i = 0; i < nodeHookCount && totalHooks < 8; i++) {
@@ -124,41 +124,11 @@ void loop(void) {
   serviceCanRx();
   nodeUpdate(schedulerNowMs);
   nodeServiceCanTx(schedulerNowMs, g_aim);
-  g_aim.service(nodeCurrentState(), nodeErrorBits());
+  g_aim.service(schedulerNowMs, nodeCurrentState(), nodeErrorBits());
 
 #ifndef FLIGHT_BUILD
   aimConsoleService();
 #endif
-
-  // Periodic logging
-  static uint32_t s_lastLogMs = 0U;
-  if (s_storageReady && (schedulerNowMs - s_lastLogMs >= kLogIntervalMs)) {
-#ifndef FLIGHT_BUILD
-    bool consoleActive = aimConsoleIsActive();
-#else
-    bool consoleActive = false;
-#endif
-    if (!consoleActive) {
-      s_lastLogMs = schedulerNowMs;
-      uint32_t row[BOARD_LOG_COL_COUNT];
-      row[BOARD_LOG_TIME_MS]   = g_aim.syncedMillis();
-      
-      float pt1 = nodeGetPtValue(0);
-      float pt2 = nodeGetPtValue(1);
-      float v24 = nodeGet24vSense(0);
-      float hall = nodeGetHallEffect(0);
-      
-      std::memcpy(&row[BOARD_LOG_PT1_PSI],   &pt1, 4);
-      std::memcpy(&row[BOARD_LOG_PT2_PSI],   &pt2, 4);
-      std::memcpy(&row[BOARD_LOG_24V_SENSE], &v24, 4);
-      std::memcpy(&row[BOARD_LOG_HALL],      &hall, 4);
-      row[BOARD_LOG_RSSI]    = AimFlightRecorder::unsignify(WiFi.RSSI());
-      row[BOARD_LOG_VPT_FET] = nodeGet24vFetState(0);
-      row[BOARD_LOG_V1_FET]  = nodeGetValveState(0);
-      row[BOARD_LOG_V2_FET]  = nodeGetValveState(1);
-      s_flightRecorder.writeRow(row);
-    }
-  }
 
   kickWatchdog();
 }
