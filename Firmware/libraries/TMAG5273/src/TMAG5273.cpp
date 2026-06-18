@@ -104,10 +104,18 @@ float TMAG5273::getFluxY() {
 }
 
 float TMAG5273::getFluxZ() {
-    float data[3]; 
+    float data[3];
     if (!getAllFlux(data)) return NAN; // unsuccessful getAllFlux()
 
-    return data[2]; 
+    return data[2];
+}
+
+// Net field strength (mT), independent of the magnet's orientation to the sensor.
+float TMAG5273::getFluxMagnitude() {
+    float data[3];
+    if (!getAllFlux(data)) return NAN; // unsuccessful getAllFlux()
+
+    return sqrtf(data[0] * data[0] + data[1] * data[1] + data[2] * data[2]);
 }
 
 /// @brief obtain temperature values from sensor

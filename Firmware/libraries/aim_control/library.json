@@ -1,0 +1,22 @@
+{
+  "name": "aim_control",
+  "version": "0.0.1",
+  "description": "Unified control model (local GPIO valve/relay + remote CAN-commanded control) for AIM Network nodes",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Queens-Rocket-Engineering-Team/av-prop.git"
+  },
+  "authors": [
+    {
+      "name": "QRET",
+      "maintainer": true
+    }
+  ],
+  "frameworks": "arduino",
+  "platforms": ["ststm32", "espressif32"],
+  "dependencies": [
+    {
+      "name": "aim_network"
+    }
+  ]
+}
