@@ -86,7 +86,7 @@ void setup(void) {
   uint8_t nodeHookCount = 0U;
   const AimConsoleHook* nodeHooks = nodeConsoleHooks(nodeHookCount);
 
-  AimConsoleHook combinedHooks[8];
+  static AimConsoleHook combinedHooks[8];
   uint8_t totalHooks = 0;
   combinedHooks[totalHooks++] = {'s', "status", hookStatus};
   for (uint8_t i = 0; i < nodeHookCount && totalHooks < 8; i++) {
@@ -95,7 +95,7 @@ void setup(void) {
   aimConsoleInit(g_serial, g_fs, g_recorder, node::kName, combinedHooks, totalHooks);
 #endif
 
-  nodeInit(millis());
+  nodeInit();
 
 #ifndef FLIGHT_BUILD
   g_serial.println("Console ready. d=enter debug");
@@ -112,4 +112,5 @@ void loop(void) {
   aimConsoleService();
 #endif
   IWatchdog.reload();
+  delay(1U);
 }

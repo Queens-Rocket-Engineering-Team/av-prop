@@ -74,8 +74,8 @@ static void hookStatus(Stream& out) {
 #endif  // FLIGHT_BUILD
 
 void setup(void) {
+  Serial.setTxBufferSize(2048);      // before begin(); default is small
   Serial.begin(node::kSerialBaud);
-  delay(2000U);
   g_logger = &s_log;
   LOG_INFO("Boot board origin=%u", static_cast<unsigned>(aim::Source::Ucm));
   initWatchdog();
@@ -110,7 +110,7 @@ void setup(void) {
   aimConsoleInit(Serial, s_fs, s_flightRecorder, node::kName, combinedHooks, totalHooks);
 #endif
 
-  nodeInit(millis());
+  nodeInit();
 
 #ifndef FLIGHT_BUILD
   Serial.println("Console ready. d=enter debug");
@@ -118,17 +118,17 @@ void setup(void) {
 }
 
 void loop(void) {
-  const uint32_t schedulerNowMs = millis();
-
   // Main scheduler order: RX, updates, CAN, heartbeats, console, watchdog.
   serviceCanRx();
-  nodeUpdate(schedulerNowMs);
-  nodeServiceCanTx(schedulerNowMs, g_aim);
-  g_aim.service(schedulerNowMs, nodeCurrentState(), nodeErrorBits());
+  const uint32_t nowMs = millis();
+  nodeUpdate(nowMs);
+  nodeServiceCanTx(g_aim.syncedMillis(), g_aim);
+  g_aim.service(nowMs, nodeCurrentState(), nodeErrorBits());
 
 #ifndef FLIGHT_BUILD
   aimConsoleService();
 #endif
 
   kickWatchdog();
+  delay(1U);
 }

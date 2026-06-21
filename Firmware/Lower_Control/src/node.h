@@ -11,12 +11,12 @@
 #include "pinouts.h"
 
 namespace node {
-  constexpr char     kName[]     = "LOWER_CONTROL";
+  constexpr char     kName[]     = "HYDRA";
   constexpr uint32_t kCanBaud    = 500000U;
-  constexpr uint32_t kSerialBaud = 9600U;
+  constexpr uint32_t kSerialBaud = 38400U;
 }
 
-void nodeInit(uint32_t nowMs);
+void nodeInit();
 void nodeUpdate(uint32_t nowMs);
 void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim);
 void nodeOnRx(const aim::Msg& m, uint32_t nowMs);

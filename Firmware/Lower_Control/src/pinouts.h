@@ -54,7 +54,6 @@ constexpr uint8_t kCanLed  = PB4;
 constexpr uint8_t kDebugLed = PA8;
 constexpr uint8_t kRgbData  = PB5;
 
-
 }
 
 #endif  // LOWER_CONTROL_PINOUTS_H

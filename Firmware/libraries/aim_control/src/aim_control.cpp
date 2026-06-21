@@ -4,33 +4,32 @@
 
 namespace aim {
 
-// Drive a Local control's GPIO for the desired logical state. The pin is HIGH
-// exactly when the load is energized, so de-energized (LOW) is always safe.
+// Energize (drive HIGH) exactly when the commanded state differs from the
+// de-energized rest. De-energized (LOW) is always the safe boot position.
 static void localActuate(Control& c, bool open) {
-  const uint8_t level = open ? c.openLevel
-                             : (c.openLevel == HIGH ? LOW : HIGH);
-  digitalWrite(c.pin, level);
-  c.energized = (level == HIGH);
+  const bool energize = (open != c.defaultOpen);
+  digitalWrite(c.pin, energize ? HIGH : LOW);
+  c.energized = energize;
   c.state     = open;
 }
 
-void controlInitLocal(Control& c, uint8_t subject, uint8_t pin, uint8_t openLevel) {
-  AIM_ASSERT(openLevel == HIGH || openLevel == LOW);
+void controlInitLocal(Control& c, const char* name, uint8_t subject, uint8_t pin, bool defaultOpen) {
   c = Control{};
   c.kind        = ControlKind::Local;
+  c.name        = name;
   c.subject     = subject;
   c.pin         = pin;
-  c.openLevel   = openLevel;
-  c.defaultOpen = (openLevel == LOW);  // resting logical state at de-energized LOW
-  c.confirmed   = true;                // we drive the pin, so the state is always known
+  c.defaultOpen = defaultOpen;
+  c.confirmed   = true;
 
   pinMode(pin, OUTPUT);
   localActuate(c, c.defaultOpen);  // boot de-energized = safe
 }
 
-void controlInitRemote(Control& c, uint8_t subject, bool defaultOpen) {
+void controlInitRemote(Control& c, const char* name, uint8_t subject, bool defaultOpen) {
   c = Control{};
   c.kind        = ControlKind::Remote;
+  c.name        = name;
   c.subject     = subject;
   c.defaultOpen = defaultOpen;
   c.state       = defaultOpen;  // assume the owner also boots to its default
@@ -133,6 +132,16 @@ void controlBuildState(const Control& c, aim::Msg& out) {
   out.subject = c.subject;
   out.b[0]    = c.state ? 1U : 0U;
   out.b[1]    = c.energized ? 1U : 0U;
+}
+
+const char* controlStr(const aim::Control& c) {
+  if (!controlConfirmed(c)) {
+    return "UNKNOWN";
+  }
+  if (controlGet(c)) {
+    return c.energized ? "OPEN/ON" : "OPEN/OFF";
+  }
+  return c.energized ? "CLOSED/ON" : "CLOSED/OFF";
 }
 
 }  // namespace aim

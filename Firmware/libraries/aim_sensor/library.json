@@ -1,0 +1,22 @@
+{
+  "name": "aim_sensor",
+  "version": "0.0.1",
+  "description": "Unified sensor model (local sampled + remote received scalar telemetry) for AIM Network nodes",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Queens-Rocket-Engineering-Team/av-prop.git"
+  },
+  "authors": [
+    {
+      "name": "QRET",
+      "maintainer": true
+    }
+  ],
+  "frameworks": "arduino",
+  "platforms": ["ststm32", "espressif32"],
+  "dependencies": [
+    {
+      "name": "aim_network"
+    }
+  ]
+}

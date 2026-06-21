@@ -11,9 +11,9 @@
 #include "pinouts.h"
 
 namespace node {
-constexpr char     kName[]      = "PEGASUS";
-constexpr uint32_t kCanBaud     = 500000U;
-constexpr uint32_t kSerialBaud   = 115200U;
+constexpr char kName[] = "PEGASUS";
+constexpr uint32_t kCanBaud = 500000U;
+constexpr uint32_t kSerialBaud = 115200U;
 }  // namespace node
 
 // Standard telemetry columns for flight recording
@@ -31,11 +31,10 @@ enum BoardTelemetryCol {
 };
 
 // Standard node interface
-void nodeInit(uint32_t nowMs);
-void nodeUpdate(uint32_t schedulerNowMs);
-void nodeServiceCanTx(uint32_t schedulerNowMs, AimNetwork& aim);
+void nodeInit();
+void nodeUpdate(uint32_t nowMs);
+void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim);
 void nodeOnRx(const aim::Msg& m, uint32_t nowMs);
-
 aim::NodeState nodeCurrentState();
 uint16_t nodeErrorBits();
 
