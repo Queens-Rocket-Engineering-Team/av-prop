@@ -205,12 +205,13 @@ static void qlcpTelemetryService(uint32_t nowMs);
 
 // Command a control by its QLCP/cmdId index. Local controls actuate immediately;
 // remote controls queue a Cmd that nodeServiceCanTx sends to the LCM.
-static bool setControlByIndex(uint8_t index, bool open) {
+static bool setControlByIndex(uint8_t index, bool open, bool& confirmedOut) {
   if (index >= kCtrlCount) {
     return false;
   }
   NodeLock lock;
   controlSet(s_controls[index], open);
+  confirmedOut = s_controls[index].confirmed;
   return true;
 }
 
@@ -270,7 +271,8 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
       const uint8_t cmdId = in.payload_data.control.command_id;
       const bool open = (in.payload_data.control.command_state == QLCP_CS_OPEN);
       LOG_INFO("Received control cmdId=%u state=%u", cmdId, in.payload_data.control.command_state);
-      if (setControlByIndex(cmdId, open) && controlConfirmed(s_controls[cmdId])) {
+      bool confirmed = false;
+      if (setControlByIndex(cmdId, open, confirmed) && confirmed) {
         sendAck(QLCP_PT_CONTROL, in.payload_data.header_only.sequence);
       } else {
         sendNack(QLCP_PT_CONTROL, in.payload_data.header_only.sequence, QLCP_ERR_HARDWARE_FAULT);
@@ -612,7 +614,6 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
         NodeLock lock;
         controlBuildState(s_controls[i], sm);
       }
-      sm.b[2] = static_cast<uint8_t>(aim::ValveState::Unknown);
       (void)aim.send(sm);
     }
   }
@@ -708,7 +709,8 @@ static void hookSetValve(Stream& out) {
     return;
   }
   bool open = (state == '1');
-  if (setControlByIndex(ctrlIdx, open)) {
+  bool dummyConfirmed = false;
+  if (setControlByIndex(ctrlIdx, open, dummyConfirmed)) {
     out.printf("%s -> %s\n", s_controls[ctrlIdx].name, open ? "OPEN/ON" : "CLOSED/OFF");
   } else {
     out.println("Set control failed");

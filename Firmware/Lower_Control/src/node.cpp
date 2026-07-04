@@ -18,13 +18,15 @@ static aim::Control s_controls[kCtrlCount];
 enum LcmSensor : uint8_t { kSenPt204, kSenPtSpare2, kSenTc, kSenVsol, kSenCount };
 static aim::Sensor s_sensors[kSenCount];
 
-static aim::Job s_adcJob{100U, 0U};
-static aim::Job s_voltSenseJob{500U, 0U};
-static aim::Job s_broadcastJob{500U, 0U};
+// should we make this variable, set sampling rate?
+static aim::Job s_adcJob{10U, 0U};
+static aim::Job s_voltSenseJob{2000U, 0U};
+static aim::Job s_broadcastJob{1000U, 0U};
 
 // VSOL sense: 12-bit ADC over 3.3 V ref through an 11:1 divider.
 constexpr float kVoltSenseScale = (3.3f / 4095.0f) * 11.0f;
 
+// Think of a better way to handle staleness when no traffic pre launch
 constexpr uint32_t kUpperStaleTimeoutMs = 60000U;
 static uint32_t s_upperLastRxMs = 0U;
 static bool     s_upperLinkUp   = false;
@@ -118,7 +120,7 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
     controlServiceTx(s_controls[i], nowMs, aim);
   }
 
-  // Sensor frame broadcasts at 10 Hz
+  // Sensor frame broadcasts at 100 Hz
   if (s_adcJob.due(nowMs)) {
     aim::Msg msg = {};
     sensorBuildFrame(s_sensors[kSenPt204], msg);

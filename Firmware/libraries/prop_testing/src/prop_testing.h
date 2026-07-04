@@ -5,6 +5,7 @@
 
 // --- Pressure transducer (4-20 mA) ---
 constexpr float kPtShuntOhms = 62.0f;
+// TODO: update for PTs in use
 constexpr float kPtMaxPsi    = 2000.0f;
 
 // --- Thermistor (cold-junction NTC, Ohmite TX series) ---
