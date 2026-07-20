@@ -21,17 +21,19 @@ typedef struct {
     uint16_t server_udp_port;
     int32_t tcp_sock;
     int32_t udp_sock;
-    int32_t ssdp_sock;
+    int32_t discovery_sock;
 } net_link_t;
 
 void net_link_init(net_link_t *link);
 void net_link_close_all(net_link_t *link);
 
-// SSDP discovery: the QLCP server multicasts M-SEARCH; we learn its IP from
-// the packet's source address. The socket stays open across service calls.
-esp_err_t ssdp_listen_begin(net_link_t *link);
-int ssdp_listen_service(net_link_t *link); // 1 = server_ip filled
-void ssdp_listen_end(net_link_t *link);
+// QLCP discovery (protocol v3): the server multicasts a QLCP DISCOVERY
+// packet (header-only, type 0x01) to 239.100.0.1:10000; we learn its IP
+// from the packet's source address. The socket stays open across service
+// calls.
+esp_err_t discovery_listen_begin(net_link_t *link);
+int discovery_listen_service(net_link_t *link); // 1 = server_ip filled
+void discovery_listen_end(net_link_t *link);
 
 // TCP control channel (non-blocking connect + incremental framing).
 esp_err_t tcp_connect_begin(net_link_t *link);
