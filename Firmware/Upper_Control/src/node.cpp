@@ -13,6 +13,7 @@
 #include <prop_testing.h>
 #include <cstring>
 #include <WiFi.h>
+#include <esp_timer.h>
 
 extern "C" {
 #include "wifi_tools.h"
@@ -90,8 +91,7 @@ static aim::Job s_broadcastJob = {500U, 0U};
 
 constexpr char kBoardQlcpConfigJson[] = R"json({
   "device_name": "PEGASUS-UPPER",
-  "device_type": "Sensor Monitor",
-  "sensor_info": {
+  "sensors": {
     "pressure_transducer": {
       "PT202": {
         "unit": "PSI"
@@ -124,33 +124,44 @@ constexpr char kBoardQlcpConfigJson[] = R"json({
     }
   },
   "controls": {
-    "AV204": {
-      "default_state": "OPEN",
-      "type": "solenoid"
+    "valve": {
+      "AV204": {
+        "default_state": "OPEN",
+        "type": "BOOL",
+        "unit": "bool"
+      },
+      "AVSPARE": {
+        "default_state": "CLOSED",
+        "type": "BOOL",
+        "unit": "bool"
+      },
+      "AV203": {
+        "default_state": "OPEN",
+        "type": "BOOL",
+        "unit": "bool"
+      },
+      "AV205": {
+        "default_state": "CLOSED",
+        "type": "BOOL",
+        "unit": "bool"
+      }
     },
-    "AVSPARE": {
-      "default_state": "CLOSED",
-      "type": "solenoid"
-    },
-    "AV203": {
-      "default_state": "OPEN",
-      "type": "solenoid"
-    },
-    "AV205": {
-      "default_state": "CLOSED",
-      "type": "solenoid"
-    },
-    "PwrPtUpper": {
-      "default_state": "OPEN",
-      "type": "relay"
-    },
-    "PwrSolLower": {
-      "default_state": "OPEN",
-      "type": "relay"
-    },
-    "PwrPtLower": {
-      "default_state": "OPEN",
-      "type": "relay"
+    "relay": {
+      "PwrPtUpper": {
+        "default_state": "OPEN",
+        "type": "BOOL",
+        "unit": "bool"
+      },
+      "PwrSolLower": {
+        "default_state": "OPEN",
+        "type": "BOOL",
+        "unit": "bool"
+      },
+      "PwrPtLower": {
+        "default_state": "OPEN",
+        "type": "BOOL",
+        "unit": "bool"
+      }
     }
   }
 })json";
@@ -171,6 +182,8 @@ constexpr uint32_t kNetRxIdleTimeoutMs    = 15000U;
 constexpr uint32_t kNetBackoffMinMs       = 1000U;
 constexpr uint32_t kNetBackoffMaxMs       = 8000U;
 
+constexpr uint32_t kTimesyncIntervalMs = 60000U;
+
 static net_link_t   s_netLink = {};
 static QlcpNetState s_netState = QLCP_NET_IDLE;
 static uint32_t     s_stateEnteredMs = 0U;
@@ -178,13 +191,14 @@ static uint32_t     s_lastRxMs = 0U;
 static uint32_t     s_backoffMs = kNetBackoffMinMs;
 static bool         s_configSent = false;
 static uint16_t     s_sequence = 0U;
-static uint32_t     s_tsOffset = 0U;
+static int64_t      s_tsOffsetUs = 0;  // serverTime_us = deviceTime_us + s_tsOffsetUs
 static uint16_t     s_streamFrequencyHz = 0U;
 static uint32_t     s_lastStreamTxMs = 0U;
+static aim::Job     s_timesyncJob = {kTimesyncIntervalMs, 0U};
 
 static void fillHeader(qlcp_header& header) {
   header.sequence = static_cast<uint8_t>(s_sequence++);
-  header.timestamp = s_tsOffset + millis();
+  header.timestamp_us = static_cast<uint64_t>(esp_timer_get_time() + s_tsOffsetUs);
 }
 
 static void netTransition(QlcpNetState next, uint32_t nowMs) {
@@ -238,17 +252,70 @@ static void sendNack(uint8_t nackType, uint16_t nackSeq, uint8_t errCode) {
   }
 }
 
+// STATUS is the required response to CONTROL, STATUS_REQUEST, and ESTOP —
+// it doubles as the ack for whichever of those triggered it (ackType/ackSeq).
+static void sendStatus(uint8_t ackType, uint16_t ackSeq) {
+  qlcp_control_data controlData[kCtrlCount] = {};
+  {
+    NodeLock lock;
+    for (uint8_t i = 0U; i < kCtrlCount; i++) {
+      controlData[i].id = i;
+      controlData[i].type = QLCP_CONTROL_BOOL;
+      controlData[i].state.control_bool = controlGet(s_controls[i]) ? QLCP_CS_OPEN : QLCP_CS_CLOSED;
+    }
+  }
+  qlcp_server_payload out = {};
+  out.packet_type = QLCP_PT_STATUS;
+  fillHeader(out.payload_data.status.header);
+  out.payload_data.status.ack_packet_type = ackType;
+  out.payload_data.status.ack_sequence = static_cast<uint8_t>(ackSeq);
+  out.payload_data.status.control_data = controlData;
+  out.payload_data.status.control_count = kCtrlCount;
+  if (tcp_tx_payload(&s_netLink, &out) != 0) {
+    LOG_DEBUG("STATUS dropped — TX busy");
+  }
+}
+
+// Device-initiated: sent once right after CONFIG is queued, then every
+// kTimesyncIntervalMs. The server echoes our send time back (t1_echo_us)
+// alongside its own clock (t2_us) in TIMESYNC_RESP.
+static void sendTimesyncReq() {
+  qlcp_server_payload out = {};
+  out.packet_type = QLCP_PT_TIMESYNC_REQ;
+  out.payload_data.header_only.packet_type = QLCP_PT_TIMESYNC_REQ;
+  fillHeader(out.payload_data.header_only.header);
+  if (tcp_tx_payload(&s_netLink, &out) != 0) {
+    LOG_DEBUG("TIMESYNC_REQ dropped — TX busy");
+  }
+}
+
 static void qlcpHandlePacket(const qlcp_client_payload& in) {
   switch (in.packet_type) {
-    case QLCP_PT_TIMESYNC: {
-      const uint32_t serverTime = in.payload_data.header_only.timestamp;
-      s_tsOffset = serverTime - millis();
-      LOG_INFO("QLCP timesync completed. Offset: %u ms", s_tsOffset);
-      sendAck(QLCP_PT_TIMESYNC, in.payload_data.header_only.sequence);
+    case QLCP_PT_ESTOP: {
+      LOG_WARN("QLCP ESTOP — forcing all controls to default state");
+      {
+        NodeLock lock;
+        for (uint8_t i = 0U; i < kCtrlCount; i++) {
+          controlSetDefault(s_controls[i]);
+        }
+      }
+      sendStatus(QLCP_PT_ESTOP, in.payload_data.header_only.header.sequence);
+      break;
+    }
+    case QLCP_PT_TIMESYNC_RESP: {
+      const uint64_t t1EchoUs = in.payload_data.timesync_resp.t1_echo_us;
+      const uint64_t t2Us = in.payload_data.timesync_resp.t2_us;
+      const int64_t t3Us = esp_timer_get_time();
+      // NTP-style offset: serverTime ~= t2; our clock at receipt is t3;
+      // split the difference assuming a symmetric round trip.
+      s_tsOffsetUs = static_cast<int64_t>(t2Us) -
+                     static_cast<int64_t>((t1EchoUs + static_cast<uint64_t>(t3Us)) / 2ULL);
+      LOG_INFO("QLCP timesync completed. Offset: %lld us", static_cast<long long>(s_tsOffsetUs));
+      sendAck(QLCP_PT_TIMESYNC_RESP, in.payload_data.timesync_resp.header.sequence);
       break;
     }
     case QLCP_PT_HEARTBEAT: {
-      sendAck(QLCP_PT_HEARTBEAT, in.payload_data.header_only.sequence);
+      sendAck(QLCP_PT_HEARTBEAT, in.payload_data.header_only.header.sequence);
       break;
     }
     case QLCP_PT_STREAM_START: {
@@ -258,45 +325,37 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
         s_lastStreamTxMs = millis();
         LOG_INFO("QLCP Stream Start at %u Hz", freq);
       }
-      sendAck(QLCP_PT_STREAM_START, in.payload_data.header_only.sequence);
+      sendAck(QLCP_PT_STREAM_START, in.payload_data.stream_start.header.sequence);
       break;
     }
     case QLCP_PT_STREAM_STOP: {
       s_streamFrequencyHz = 0U;
       LOG_INFO("QLCP Stream Stop");
-      sendAck(QLCP_PT_STREAM_STOP, in.payload_data.header_only.sequence);
+      sendAck(QLCP_PT_STREAM_STOP, in.payload_data.header_only.header.sequence);
       break;
     }
     case QLCP_PT_CONTROL: {
-      const uint8_t cmdId = in.payload_data.control.command_id;
-      const bool open = (in.payload_data.control.command_state == QLCP_CS_OPEN);
-      LOG_INFO("Received control cmdId=%u state=%u", cmdId, in.payload_data.control.command_state);
+      const uint8_t cmdId = in.payload_data.control.control_data.id;
+      const uint8_t cmdType = in.payload_data.control.control_data.type;
+      const uint16_t seq = in.payload_data.control.header.sequence;
+      LOG_INFO("Received control cmdId=%u type=%u", cmdId, cmdType);
+      if (cmdType != QLCP_CONTROL_BOOL) {
+        // Every UCM control is a bool valve/relay — nothing else is valid here.
+        sendNack(QLCP_PT_CONTROL, seq, QLCP_ERR_INVALID_PARAM);
+        break;
+      }
+      const bool open = (in.payload_data.control.control_data.state.control_bool == QLCP_CS_OPEN);
       bool confirmed = false;
-      if (setControlByIndex(cmdId, open, confirmed) && confirmed) {
-        sendAck(QLCP_PT_CONTROL, in.payload_data.header_only.sequence);
+      const bool validId = setControlByIndex(cmdId, open, confirmed);
+      if (validId && confirmed) {
+        sendStatus(QLCP_PT_CONTROL, seq);
       } else {
-        sendNack(QLCP_PT_CONTROL, in.payload_data.header_only.sequence, QLCP_ERR_HARDWARE_FAULT);
+        sendNack(QLCP_PT_CONTROL, seq, validId ? QLCP_ERR_HARDWARE_FAULT : QLCP_ERR_INVALID_ID);
       }
       break;
     }
     case QLCP_PT_STATUS_REQUEST: {
-      qlcp_control_data controlData[kCtrlCount] = {};
-      {
-        NodeLock lock;
-        for (uint8_t i = 0U; i < kCtrlCount; i++) {
-          controlData[i].control_id = i;
-          controlData[i].control_state = controlGet(s_controls[i]) ? QLCP_CS_OPEN : QLCP_CS_CLOSED;
-        }
-      }
-      qlcp_server_payload out = {};
-      out.packet_type = QLCP_PT_STATUS;
-      fillHeader(out.payload_data.status.header);
-      out.payload_data.status.control_data = controlData;
-      out.payload_data.status.control_count = kCtrlCount;
-      out.payload_data.status.device_status = QLCP_DS_ACTIVE;
-      if (tcp_tx_payload(&s_netLink, &out) != 0) {
-        LOG_DEBUG("STATUS dropped — TX busy");
-      }
+      sendStatus(QLCP_PT_STATUS_REQUEST, in.payload_data.header_only.header.sequence);
       break;
     }
     default:
@@ -317,7 +376,7 @@ static void qlcpNetService(uint32_t nowMs) {
       if (WiFi.status() == WL_CONNECTED) {
         LOG_INFO("WiFi Connected! IP: %s", WiFi.localIP().toString().c_str());
         s_netLink.netif_handle = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-        if (ssdp_listen_begin(&s_netLink) == ESP_OK) {
+        if (discovery_listen_begin(&s_netLink) == ESP_OK) {
           netTransition(QLCP_NET_DISCOVER, nowMs);
         } else {
           netFail(nowMs);
@@ -333,9 +392,9 @@ static void qlcpNetService(uint32_t nowMs) {
         netFail(nowMs);
         break;
       }
-      const int found = ssdp_listen_service(&s_netLink);
+      const int found = discovery_listen_service(&s_netLink);
       if (found == 1) {
-        ssdp_listen_end(&s_netLink);
+        discovery_listen_end(&s_netLink);
         if (tcp_connect_begin(&s_netLink) == ESP_OK) {
           netTransition(QLCP_NET_TCP_CONNECT, nowMs);
         } else {
@@ -371,12 +430,19 @@ static void qlcpNetService(uint32_t nowMs) {
         qlcp_server_payload out = {};
         out.packet_type = QLCP_PT_CONFIG;
         fillHeader(out.payload_data.config.header);
-        out.payload_data.config.config_data = kBoardQlcpConfigJson;
-        out.payload_data.config.config_data_len = sizeof(kBoardQlcpConfigJson) - 1U;
+        out.payload_data.config.config_data = reinterpret_cast<const uint8_t*>(kBoardQlcpConfigJson);
+        out.payload_data.config.config_data_len = static_cast<uint16_t>(sizeof(kBoardQlcpConfigJson) - 1U);
         if (tcp_tx_payload(&s_netLink, &out) == 0) {
           s_configSent = true;
           LOG_INFO("Sent CONFIG packet to server");
+          // Device-initiated timesync starts right after CONFIG; periodic
+          // resync cadence (kTimesyncIntervalMs) counts from here.
+          sendTimesyncReq();
+          s_timesyncJob.lastMs = nowMs;
         }
+      }
+      if (s_configSent && s_timesyncJob.due(nowMs)) {
+        sendTimesyncReq();
       }
       if (tcp_tx_service(&s_netLink) < 0) {
         netFail(nowMs);
@@ -403,7 +469,7 @@ static void qlcpNetService(uint32_t nowMs) {
         s_backoffMs = (s_backoffMs >= (kNetBackoffMaxMs / 2U)) ? kNetBackoffMaxMs : (s_backoffMs * 2U);
         if (WiFi.status() != WL_CONNECTED) {
           netTransition(QLCP_NET_WIFI_START, nowMs);
-        } else if (ssdp_listen_begin(&s_netLink) == ESP_OK) {
+        } else if (discovery_listen_begin(&s_netLink) == ESP_OK) {
           netTransition(QLCP_NET_DISCOVER, nowMs);
         } else {
           netFail(nowMs);
@@ -429,20 +495,16 @@ static void qlcpTelemetryService(uint32_t nowMs) {
   {
     NodeLock lock;
     for (uint8_t i = 0U; i < 4U; i++) {  // PTs occupy sensor_id 0..3 = s_sensors[0..3]
-      readings[i].sensor_id = i;
-      readings[i].unit = QLCP_UNIT_PSI;
+      readings[i].id = i;
       readings[i].value = sensorEng(s_sensors[i]);
     }
-    readings[4].sensor_id = kSenTc;
-    readings[4].unit = QLCP_UNIT_CELSIUS;
+    readings[4].id = kSenTc;
     readings[4].value = sensorEng(s_sensors[kSenTc]);
 
-    readings[5].sensor_id = kSenVolt24;
-    readings[5].unit = QLCP_UNIT_VOLTS;
+    readings[5].id = kSenVolt24;
     readings[5].value = sensorEng(s_sensors[kSenVolt24]);
 
-    readings[6].sensor_id = kSenVsol;
-    readings[6].unit = QLCP_UNIT_VOLTS;
+    readings[6].id = kSenVsol;
     readings[6].value = sensorEng(s_sensors[kSenVsol]);
   }
 
