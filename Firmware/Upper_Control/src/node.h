@@ -4,7 +4,6 @@
 #include <Arduino.h>
 #include <cstdint>
 
-#include <aim_can_driver.h>
 #include <aim_network.h>
 #include <aim_safety.h>
 
@@ -12,7 +11,8 @@
 
 namespace node {
 constexpr char kName[] = "PEGASUS";
-constexpr uint32_t kCanBaud = 500000U;
+constexpr aim::Source kSource = aim::Source::Ucm;
+constexpr uint32_t kCanBaud = 1000000U;
 constexpr uint32_t kSerialBaud = 115200U;
 }  // namespace node
 
@@ -21,16 +21,14 @@ enum BoardTelemetryCol {
   BOARD_LOG_TIME_MS,
   BOARD_LOG_PT1_PSI,
   BOARD_LOG_PT2_PSI,
-  BOARD_LOG_24V_SENSE,
-  BOARD_LOG_HALL,
   BOARD_LOG_RSSI,
   BOARD_LOG_VPT_FET,
   BOARD_LOG_V1_FET,
-  BOARD_LOG_V2_FET,
   BOARD_LOG_COL_COUNT
 };
 
 // Standard node interface
+extern AimNetwork g_aim;
 void nodeInit();
 void nodeUpdate(uint32_t nowMs);
 void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim);

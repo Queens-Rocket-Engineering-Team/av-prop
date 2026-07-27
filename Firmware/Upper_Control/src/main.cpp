@@ -22,12 +22,12 @@ static constexpr uint32_t kMaxLogSize = (kStoragePartitionBytes - kLfsMetadataRe
 
 static AimFlightRecorder s_flightRecorder(s_fs, BOARD_LOG_COL_COUNT, 100, kMaxLogSize);
 
-static AimCanDriver g_canHw(node::kCanBaud, pins::kCanRx, pins::kCanTx);
-static AimNetwork g_aim(&g_canHw, aim::Source::Ucm);
+static AimCanHardware g_canHw(node::kCanBaud, pins::kCanRx, pins::kCanTx);
+AimNetwork g_aim(&g_canHw, node::kSource);
 
 static bool s_watchdogReady = false;
 static bool s_storageReady = false;
-static Logger s_log(Serial, static_cast<uint8_t>(aim::Source::Ucm), LogLevel::INFO);
+static Logger s_log(Serial, static_cast<uint8_t>(node::kSource), LogLevel::INFO);
 
 static void initWatchdog(void) {
   const esp_err_t initStatus = esp_task_wdt_init(kWatchdogTimeoutMs / 1000U, true);
@@ -77,25 +77,22 @@ void setup(void) {
   Serial.setTxBufferSize(2048);      // before begin(); default is small
   Serial.begin(node::kSerialBaud);
   g_logger = &s_log;
-  LOG_INFO("Boot board origin=%u", static_cast<unsigned>(aim::Source::Ucm));
+  LOG_INFO("Boot board origin=%u", static_cast<unsigned>(node::kSource));
   initWatchdog();
 
-  // Class accept mask: Ack, State, Sensor, Time, Heartbeat
+  // Class accept mask: Ack, State, Sensor, Time, Heartbeat, Event
   if (!g_aim.begin(aim::classBit(aim::Class::Ack) |
                    aim::classBit(aim::Class::State) |
                    aim::classBit(aim::Class::Sensor) |
                    aim::classBit(aim::Class::Time) |
-                   aim::classBit(aim::Class::Heartbeat))) {
+                   aim::classBit(aim::Class::Heartbeat) |
+                   aim::classBit(aim::Class::Event))) {
     LOG_ERROR("CAN init failed");
   }
 
-  s_storageReady = s_fs.begin();
-  if (s_storageReady) {
-    LOG_INFO("Storage ready.");
-    s_flightRecorder.begin();
-  } else {
-    LOG_ERROR("Storage init FAILED.");
-  }
+  // Storage init bypassed while aim_flash_storage library is under background dev
+  s_storageReady = false;
+  LOG_INFO("Flash storage logging disabled (under background development)");
 
 #ifndef FLIGHT_BUILD
   uint8_t nodeHookCount = 0U;

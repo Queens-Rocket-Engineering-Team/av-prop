@@ -85,9 +85,9 @@ constexpr size_t kAdcChannelCount = 4U;
 constexpr uint8_t kAdcChPt202    = 0U;
 constexpr uint8_t kAdcChPtSpare1 = 1U;
 
-static aim::Job s_adcJob = {100U, 0U};
-static aim::Job s_voltSenseJob = {500U, 0U};
-static aim::Job s_broadcastJob = {500U, 0U};
+static aim::Job s_adcJob = {100U, 0U};          // 10 Hz PT CAN broadcast
+static aim::Job s_telemetryJob = {500U, 0U};    // 2 Hz 24V sense & valve state CAN broadcast
+static aim::Job s_timeSyncCanJob = {1000U, 0U}; // 1 Hz CAN TimeSync master broadcast
 
 constexpr char kBoardQlcpConfigJson[] = R"json({
   "device_name": "PEGASUS-UPPER",
@@ -166,6 +166,9 @@ constexpr char kBoardQlcpConfigJson[] = R"json({
   }
 })json";
 
+static int8_t   s_pendingTelemetryMode = -1;  // -1: idle queue, 0: pending Idle, 1: pending Active
+static uint32_t s_pendingServerTimeMs  = 0U;   // 0: no pending time sync
+
 enum QlcpNetState : uint8_t {
   QLCP_NET_IDLE = 0U,
   QLCP_NET_WIFI_START,
@@ -191,14 +194,13 @@ static uint32_t     s_lastRxMs = 0U;
 static uint32_t     s_backoffMs = kNetBackoffMinMs;
 static bool         s_configSent = false;
 static uint16_t     s_sequence = 0U;
-static int64_t      s_tsOffsetUs = 0;  // serverTime_us = deviceTime_us + s_tsOffsetUs
 static uint16_t     s_streamFrequencyHz = 0U;
 static uint32_t     s_lastStreamTxMs = 0U;
-static aim::Job     s_timesyncJob = {kTimesyncIntervalMs, 0U};
+static aim::Job     s_qlcpTimeSyncJob = {kTimesyncIntervalMs, 0U};
 
 static void fillHeader(qlcp_header& header) {
   header.sequence = static_cast<uint8_t>(s_sequence++);
-  header.timestamp_us = static_cast<uint64_t>(esp_timer_get_time() + s_tsOffsetUs);
+  header.timestamp_us = static_cast<uint64_t>(g_aim.syncedMillis()) * 1000ULL;
 }
 
 static void netTransition(QlcpNetState next, uint32_t nowMs) {
@@ -303,14 +305,12 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
       break;
     }
     case QLCP_PT_TIMESYNC_RESP: {
-      const uint64_t t1EchoUs = in.payload_data.timesync_resp.t1_echo_us;
-      const uint64_t t2Us = in.payload_data.timesync_resp.t2_us;
-      const int64_t t3Us = esp_timer_get_time();
-      // NTP-style offset: serverTime ~= t2; our clock at receipt is t3;
-      // split the difference assuming a symmetric round trip.
-      s_tsOffsetUs = static_cast<int64_t>(t2Us) -
-                     static_cast<int64_t>((t1EchoUs + static_cast<uint64_t>(t3Us)) / 2ULL);
-      LOG_INFO("QLCP timesync completed. Offset: %lld us", static_cast<long long>(s_tsOffsetUs));
+      const uint32_t serverTimeMs = static_cast<uint32_t>(in.payload_data.timesync_resp.t2_us / 1000ULL);
+      {
+        NodeLock lock;
+        s_pendingServerTimeMs = serverTimeMs;
+      }
+      LOG_INFO("QLCP timesync received: %lu ms", static_cast<unsigned long>(serverTimeMs));
       sendAck(QLCP_PT_TIMESYNC_RESP, in.payload_data.timesync_resp.header.sequence);
       break;
     }
@@ -325,12 +325,20 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
         s_lastStreamTxMs = millis();
         LOG_INFO("QLCP Stream Start at %u Hz", freq);
       }
+      {
+        NodeLock lock;
+        s_pendingTelemetryMode = 1;
+      }
       sendAck(QLCP_PT_STREAM_START, in.payload_data.stream_start.header.sequence);
       break;
     }
     case QLCP_PT_STREAM_STOP: {
       s_streamFrequencyHz = 0U;
       LOG_INFO("QLCP Stream Stop");
+      {
+        NodeLock lock;
+        s_pendingTelemetryMode = 0;
+      }
       sendAck(QLCP_PT_STREAM_STOP, in.payload_data.header_only.header.sequence);
       break;
     }
@@ -438,10 +446,10 @@ static void qlcpNetService(uint32_t nowMs) {
           // Device-initiated timesync starts right after CONFIG; periodic
           // resync cadence (kTimesyncIntervalMs) counts from here.
           sendTimesyncReq();
-          s_timesyncJob.lastMs = nowMs;
+          s_qlcpTimeSyncJob.lastMs = nowMs;
         }
       }
-      if (s_configSent && s_timesyncJob.due(nowMs)) {
+      if (s_configSent && s_qlcpTimeSyncJob.due(nowMs)) {
         sendTimesyncReq();
       }
       if (tcp_tx_service(&s_netLink) < 0) {
@@ -658,18 +666,15 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
     (void)aim.send(pt2Msg);
   }
 
-  // Voltage frame at 2 Hz
-  if (s_voltSenseJob.due(nowMs)) {
+  // 2 Hz Telemetry Broadcast (24V sense & local valve states)
+  if (s_telemetryJob.due(nowMs)) {
     aim::Msg solMsg = {};
     {
       NodeLock lock;
       sensorBuildFrame(s_sensors[kSenVolt24], solMsg);
     }
     (void)aim.send(solMsg);
-  }
 
-  // Local valve STATE broadcast at 2 Hz
-  if (s_broadcastJob.due(nowMs)) {
     for (uint8_t i = kCtrlAv204; i <= kCtrlAvSpare; i++) {
       aim::Msg sm = {};
       {
@@ -686,6 +691,43 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
     for (uint8_t i = 0U; i < kCtrlCount; i++) {
       controlServiceTx(s_controls[i], nowMs, aim);
     }
+  }
+
+  // Apply pending server time sync from QLCP (under NodeLock)
+  uint32_t syncTimeMs = 0U;
+  {
+    NodeLock lock;
+    syncTimeMs = s_pendingServerTimeMs;
+    s_pendingServerTimeMs = 0U;
+  }
+  if (syncTimeMs > 0U) {
+    aim.syncTime(syncTimeMs);
+    LOG_INFO("AimNetwork master time synced to server: %lu ms", static_cast<unsigned long>(syncTimeMs));
+  }
+
+  // 1 Hz CAN TimeSync broadcast (UCM is the network time master)
+  if (s_timeSyncCanJob.due(nowMs)) {
+    aim::Msg tsMsg = {};
+    tsMsg.cls     = aim::Class::Time;
+    tsMsg.subject = aim::subject::TimeSync;
+    (void)aim.send(tsMsg);
+  }
+
+  // Forward QLCP STREAM_START/STOP as CAN TelemetryMode event
+  int8_t modeToSend = -1;
+  {
+    NodeLock lock;
+    modeToSend = s_pendingTelemetryMode;
+    s_pendingTelemetryMode = -1;
+  }
+
+  if (modeToSend >= 0) {
+    aim::Msg modeEvt = {};
+    modeEvt.cls     = aim::Class::Event;
+    modeEvt.subject = aim::subject::TelemetryMode;
+    modeEvt.b[0]    = static_cast<uint8_t>(modeToSend);
+    (void)aim.send(modeEvt);
+    LOG_INFO("TelemetryMode CAN broadcast: %s", modeToSend == 1 ? "Active" : "Idle");
   }
 }
 
