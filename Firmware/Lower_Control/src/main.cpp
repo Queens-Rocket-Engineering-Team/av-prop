@@ -19,10 +19,10 @@ static constexpr uint16_t kLogOriginRefresh  = 64U;
 static constexpr uint32_t kLogMaxSize        = 1UL * 1024UL * 1024UL;
 static const char* const  kLogHeaders[kLogCols] = {"time"};
 
-static AimCanDriver g_canHw(node::kCanBaud, CAN1);
-static AimNetwork g_aim(&g_canHw, aim::Source::Lcm);
+static AimCanHardware g_canHw(node::kCanBaud, CAN1);
+static AimNetwork g_aim(&g_canHw, node::kSource);
 static SoftwareSerial g_serial(pins::kSerialRx, pins::kSerialTx);
-static Logger g_log(g_serial, static_cast<uint8_t>(aim::Source::Lcm), LogLevel::INFO);
+static Logger g_log(g_serial, static_cast<uint8_t>(node::kSource), LogLevel::INFO);
 
 static SpiNorFlashDriver g_flashDriver(pins::kFlashCs, SPI);
 static AimFileSystem g_fs(&g_flashDriver);
@@ -59,7 +59,7 @@ static void hookStatus(Stream& out) {
 void setup(void) {
   g_serial.begin(node::kSerialBaud);
   g_logger = &g_log;
-  LOG_INFO("Boot %s source=%u", node::kName, static_cast<unsigned>(aim::Source::Lcm));
+  LOG_INFO("Boot %s source=%u", node::kName, static_cast<unsigned>(node::kSource));
   IWatchdog.begin(kWatchdogTimeoutUs);
   LOG_INFO("Watchdog ready");
 
@@ -67,7 +67,8 @@ void setup(void) {
 
   if (!g_aim.begin(aim::classBit(aim::Class::Cmd) |
                    aim::classBit(aim::Class::Time) |
-                   aim::classBit(aim::Class::Heartbeat))) {
+                   aim::classBit(aim::Class::Heartbeat) |
+                   aim::classBit(aim::Class::Event))) {
     LOG_ERROR("CAN init failed");
   }
 

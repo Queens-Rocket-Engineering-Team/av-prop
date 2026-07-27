@@ -4,16 +4,16 @@
 #include <Arduino.h>
 #include <cstdint>
 
-#include <aim_can_driver.h>
 #include <aim_network.h>
 #include <aim_safety.h>
 
 #include "pinouts.h"
 
 namespace node {
-  constexpr char     kName[]     = "HYDRA";
-  constexpr uint32_t kCanBaud    = 500000U;
-  constexpr uint32_t kSerialBaud = 38400U;
+  constexpr char        kName[]     = "HYDRA";
+  constexpr aim::Source kSource     = aim::Source::Lcm;
+  constexpr uint32_t    kCanBaud    = 1000000U;
+  constexpr uint32_t    kSerialBaud = 38400U;
 }
 
 void nodeInit();

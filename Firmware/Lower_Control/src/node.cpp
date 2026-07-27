@@ -18,16 +18,23 @@ static aim::Control s_controls[kCtrlCount];
 enum LcmSensor : uint8_t { kSenPt204, kSenPtSpare2, kSenTc, kSenVsol, kSenCount };
 static aim::Sensor s_sensors[kSenCount];
 
-// should we make this variable, set sampling rate?
-static aim::Job s_adcJob{10U, 0U};
-static aim::Job s_voltSenseJob{2000U, 0U};
-static aim::Job s_broadcastJob{1000U, 0U};
+// LCM rate constants: 200 Hz PT CAN TX in Active mode, 1 Hz baseline in Idle mode.
+constexpr uint32_t kAdcActivePeriodMs      = 5U;     // 200 Hz (PT204 chamber pressure for LoRa downlink)
+constexpr uint32_t kAdcIdlePeriodMs         = 1000U;  // 1 Hz
+constexpr uint32_t kVoltSenseActivePeriodMs = 200U;   // 5 Hz
+constexpr uint32_t kVoltSenseIdlePeriodMs   = 2000U;  // 0.5 Hz
+constexpr uint32_t kBroadcastActivePeriodMs = 500U;   // 2 Hz
+constexpr uint32_t kBroadcastIdlePeriodMs   = 1000U;  // 1 Hz
+
+static aim::Job s_adcJob{kAdcIdlePeriodMs, 0U};
+static aim::Job s_voltSenseJob{kVoltSenseIdlePeriodMs, 0U};
+static aim::Job s_broadcastJob{kBroadcastIdlePeriodMs, 0U};
 
 // VSOL sense: 12-bit ADC over 3.3 V ref through an 11:1 divider.
 constexpr float kVoltSenseScale = (3.3f / 4095.0f) * 11.0f;
 
-// Think of a better way to handle staleness when no traffic pre launch
-constexpr uint32_t kUpperStaleTimeoutMs = 60000U;
+// Link watchdog timeout: 2.0s tolerates 1 missed heartbeat while safing in <2.0s on link loss
+constexpr uint32_t kUpperStaleTimeoutMs = 2000U;
 static uint32_t s_upperLastRxMs = 0U;
 static bool     s_upperLinkUp   = false;
 
@@ -149,6 +156,30 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
 }
 
 void nodeOnRx(const aim::Msg& m, uint32_t nowMs) {
+  // Rate switching: latch job periods on TelemetryMode/LaunchDetect events
+  if (m.cls == aim::Class::Event) {
+    if (m.subject == aim::subject::LaunchDetect || m.subject == aim::subject::TelemetryMode) {
+      const bool isActive = (m.subject == aim::subject::LaunchDetect) || (m.b[0] == 1U);
+      const uint32_t newAdcPeriod = isActive ? kAdcActivePeriodMs : kAdcIdlePeriodMs;
+      if (s_adcJob.periodMs != newAdcPeriod) {
+        s_adcJob.periodMs       = newAdcPeriod;
+        s_voltSenseJob.periodMs = isActive ? kVoltSenseActivePeriodMs : kVoltSenseIdlePeriodMs;
+        s_broadcastJob.periodMs = isActive ? kBroadcastActivePeriodMs : kBroadcastIdlePeriodMs;
+        LOG_INFO("TelemetryMode event (subj=0x%02X active=%d): ADC rate -> %lu ms",
+                 static_cast<unsigned>(m.subject), static_cast<int>(isActive),
+                 static_cast<unsigned long>(newAdcPeriod));
+      }
+    } else if (m.subject == aim::subject::LowPower) {
+      if (m.b[0] == 1U) {
+        s_adcJob.periodMs       = kAdcIdlePeriodMs;
+        s_voltSenseJob.periodMs = kVoltSenseIdlePeriodMs;
+        s_broadcastJob.periodMs = kBroadcastIdlePeriodMs;
+        LOG_INFO("LowPower: LCM rates -> idle");
+      }
+    }
+    return;  // Events are not control messages; skip control routing below
+  }
+
   if (m.source == aim::Source::Ucm) {
     s_upperLastRxMs = nowMs;
   }
