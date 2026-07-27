@@ -2,9 +2,9 @@
 
 // --- Pressure transducer ---
 
-float processPT(float voltagePt) {
+float processPT(float voltagePt, float maxPsi) {
   const float currentMa = (voltagePt / kPtShuntOhms) * 1000.0f;
-  return (currentMa - 4.0f) * (kPtMaxPsi / 16.0f);
+  return (currentMa - 4.0f) * (maxPsi / 16.0f);
 }
 
 // --- Thermocouple ---

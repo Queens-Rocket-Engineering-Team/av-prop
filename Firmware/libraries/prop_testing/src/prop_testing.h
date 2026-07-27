@@ -19,8 +19,8 @@ constexpr float kAdcMaxCount     = 4095.0f;
 // --- K-type thermocouple ---
 constexpr float kSeebeckUvPerC = 41.276f;
 
-// Pressure transducer
-float processPT(float voltagePt);
+// Pressure transducer (4-20 mA with optional maxPsi range override)
+float processPT(float voltagePt, float maxPsi = kPtMaxPsi);
 
 // Thermocouple
 float readColdJunction(int thermPin);
