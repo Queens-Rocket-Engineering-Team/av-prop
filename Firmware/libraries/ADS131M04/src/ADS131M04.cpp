@@ -23,9 +23,14 @@ ADS131M04::ADS131M04(int8_t _CS_PIN, int8_t _DRDY_PIN, SPIClass* _SPI) {
 
 // setup the ADC
 void ADS131M04::init() {
-    pinMode(csPin, OUTPUT); 
+
+    // handle case where board has NO CS pin connected (csPin = -1)
+    if (csPin != -1) {
+        pinMode(csPin, OUTPUT);  
+        digitalWrite(csPin, HIGH); 
+    }
+    
     pinMode(drdyPin, INPUT_PULLUP);
-    digitalWrite(csPin, HIGH); 
 
     spi->begin(); 
     
