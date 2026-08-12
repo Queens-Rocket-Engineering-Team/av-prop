@@ -20,8 +20,8 @@ extern "C" {
 #include <qlcp_lib.h>
 }
 
-#define WIFI_SSID "QRET"
-#define WIFI_PASS "Mach2@69"
+#define WIFI_SSID "Nolito"
+#define WIFI_PASS "6138201079"
 
 static SemaphoreHandle_t s_nodeMutex = nullptr;
 
@@ -60,7 +60,7 @@ static aim::Control s_controls[kCtrlCount];
 // Indices 0..3 are the PTs, matching the QLCP sensor_id contract (Pt202..PtSpare2).
 enum UcmSensor : uint8_t {
   kSenPt202,     // 0: local  — UCM ADC
-  kSenPtSpare1,  // 1: local  — UCM ADC
+  kSenPt102,     // 1: local  — UCM ADC; wire subject is still aim::subject::PtSpare1 (0x13)
   kSenPt204,     // 2: remote — LCM
   kSenPtSpare2,  // 3: remote — LCM
   kSenTc,        // 4: remote — LCM thermocouple
@@ -82,8 +82,14 @@ constexpr uint32_t kLowerStaleTimeoutMs = 1000U;
 constexpr size_t kAdcChannelCount = 4U;
 
 // ADC channel for each UCM-local PT.
-constexpr uint8_t kAdcChPt202    = 0U;
-constexpr uint8_t kAdcChPtSpare1 = 1U;
+constexpr uint8_t kAdcChPt202 = 0U;
+constexpr uint8_t kAdcChPt102 = 1U;
+
+// Full-scale range of the transducer physically installed on each UCM channel.
+// Feeds the 4-20 mA conversion in prop_testing.cpp; the shunt (kPtShuntOhms)
+// is still shared by both channels.
+constexpr float kPt202MaxPsi = 1000.0f;
+constexpr float kPt102MaxPsi = 508.0f;
 
 static aim::Job s_adcJob = {100U, 0U};          // 10 Hz PT CAN broadcast
 static aim::Job s_telemetryJob = {500U, 0U};    // 2 Hz 24V sense & valve state CAN broadcast
@@ -96,7 +102,7 @@ constexpr char kBoardQlcpConfigJson[] = R"json({
       "PT202": {
         "unit": "PSI"
       },
-      "PTSPARE1": {
+      "PT102": {
         "unit": "PSI"
       },
       "PT204": {
@@ -656,7 +662,7 @@ void nodeInit() {
 
   // Sensors. toEng converts the catalog-scaled wire integer to engineering units.
   sensorInitLocal (s_sensors[kSenPt202],    "Pt202 (Run Tank, local)", aim::subject::Pt202,        0.01f,  "PSI");
-  sensorInitLocal (s_sensors[kSenPtSpare1], "PtSpare1 (local)",        aim::subject::PtSpare1,     0.01f,  "PSI");
+  sensorInitLocal (s_sensors[kSenPt102],    "Pt102 (local)",           aim::subject::PtSpare1,     0.01f,  "PSI");
   sensorInitRemote(s_sensors[kSenPt204],    "Pt204 (Chamber, remote)", aim::subject::Pt204,        0.01f,  "PSI");
   sensorInitRemote(s_sensors[kSenPtSpare2], "PtSpare2 (remote)",       aim::subject::PtSpare2,     0.01f,  "PSI");
   sensorInitRemote(s_sensors[kSenTc],       "TC (remote)",             aim::subject::TcLowerValve, 0.01f,  "C");
@@ -702,8 +708,8 @@ void nodeUpdate(uint32_t nowMs) {
       float volts[kAdcChannelCount] = {0.0f};
       s_adc.computeVoltages(rawData, volts);
       NodeLock lock;
-      sensorSampleEng(s_sensors[kSenPt202], processPT(volts[kAdcChPt202]));
-      sensorSampleEng(s_sensors[kSenPtSpare1], processPT(volts[kAdcChPtSpare1]));
+      sensorSampleEng(s_sensors[kSenPt202], processPT(volts[kAdcChPt202], kPt202MaxPsi));
+      sensorSampleEng(s_sensors[kSenPt102], processPT(volts[kAdcChPt102], kPt102MaxPsi));
     }
   }
 
@@ -744,7 +750,7 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
     {
       NodeLock lock;
       sensorBuildFrame(s_sensors[kSenPt202], pt1Msg);
-      sensorBuildFrame(s_sensors[kSenPtSpare1], pt2Msg);
+      sensorBuildFrame(s_sensors[kSenPt102], pt2Msg);
     }
     (void)aim.send(pt1Msg);
     (void)aim.send(pt2Msg);
