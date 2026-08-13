@@ -43,6 +43,10 @@ constexpr uint8_t kAdcChPt204    = 0U;
 constexpr uint8_t kAdcChPtSpare2 = 1U;
 constexpr uint8_t kAdcChTc       = 2U;
 
+// Full-scale range of the transducer physically installed on PT204. PtSpare2 is
+// an unpopulated spare and keeps the prop_testing default.
+constexpr float kPt204MaxPsi = 1000.0f;
+
 void nodeInit() {
 
   // ADS131M04 requires an external MCLK. TIM2 CH1 drives PA0 at 8.192 MHz.
@@ -99,7 +103,7 @@ void nodeUpdate(uint32_t nowMs) {
     float volts[4];
     if (s_adc.readChannels(raw)) {
       s_adc.computeVoltages(raw, volts);
-      sensorSampleEng(s_sensors[kSenPt204], processPT(volts[kAdcChPt204]));
+      sensorSampleEng(s_sensors[kSenPt204], processPT(volts[kAdcChPt204], kPt204MaxPsi));
       sensorSampleEng(s_sensors[kSenPtSpare2], processPT(volts[kAdcChPtSpare2]));
       sensorSampleEng(s_sensors[kSenTc], processTC(volts[kAdcChTc], pins::kCjcSense));
     }

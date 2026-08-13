@@ -20,8 +20,8 @@ extern "C" {
 #include <qlcp_lib.h>
 }
 
-#define WIFI_SSID "propnet"
-#define WIFI_PASS "propteambestteam"
+#define WIFI_SSID "Nolito"
+#define WIFI_PASS "6138201079"
 
 static SemaphoreHandle_t s_nodeMutex = nullptr;
 
@@ -60,7 +60,7 @@ static aim::Control s_controls[kCtrlCount];
 // Indices 0..3 are the PTs, matching the QLCP sensor_id contract (Pt202..PtSpare2).
 enum UcmSensor : uint8_t {
   kSenPt202,     // 0: local  — UCM ADC
-  kSenPtSpare1,  // 1: local  — UCM ADC
+  kSenPt102,     // 1: local  — UCM ADC; wire subject is still aim::subject::PtSpare1 (0x13)
   kSenPt204,     // 2: remote — LCM
   kSenPtSpare2,  // 3: remote — LCM
   kSenTc,        // 4: remote — LCM thermocouple
@@ -82,8 +82,14 @@ constexpr uint32_t kLowerStaleTimeoutMs = 1000U;
 constexpr size_t kAdcChannelCount = 4U;
 
 // ADC channel for each UCM-local PT.
-constexpr uint8_t kAdcChPt202    = 0U;
-constexpr uint8_t kAdcChPtSpare1 = 1U;
+constexpr uint8_t kAdcChPt202 = 0U;
+constexpr uint8_t kAdcChPt102 = 1U;
+
+// Full-scale range of the transducer physically installed on each UCM channel.
+// Feeds the 4-20 mA conversion in prop_testing.cpp; the shunt (kPtShuntOhms)
+// is still shared by both channels.
+constexpr float kPt202MaxPsi = 1000.0f;
+constexpr float kPt102MaxPsi = 508.0f;
 
 static aim::Job s_adcJob = {100U, 0U};          // 10 Hz PT CAN broadcast
 static aim::Job s_telemetryJob = {500U, 0U};    // 2 Hz 24V sense & valve state CAN broadcast
@@ -96,7 +102,7 @@ constexpr char kBoardQlcpConfigJson[] = R"json({
       "PT202": {
         "unit": "PSI"
       },
-      "PTSPARE1": {
+      "PT102": {
         "unit": "PSI"
       },
       "PT204": {
@@ -198,6 +204,11 @@ static uint16_t     s_streamFrequencyHz = 0U;
 static uint32_t     s_lastStreamTxMs = 0U;
 static aim::Job     s_qlcpTimeSyncJob = {kTimesyncIntervalMs, 0U};
 
+// Control picture as of the last STATUS the server actually received, and the
+// latch saying it has gone stale since. Guarded by NodeLock.
+static uint16_t     s_reportedFingerprint = 0U;
+static bool         s_statusDirty = false;
+
 static void fillHeader(qlcp_header& header) {
   header.sequence = static_cast<uint8_t>(s_sequence++);
   header.timestamp_us = static_cast<uint64_t>(g_aim.syncedMillis()) * 1000ULL;
@@ -213,6 +224,12 @@ static void netFail(uint32_t nowMs) {
   net_link_close_all(&s_netLink);
   s_streamFrequencyHz = 0U;
   s_configSent = false;
+  {
+    // The next session starts with no control picture at all — owe it one
+    // unsolicited STATUS as soon as CONFIG lands, without waiting to be asked.
+    NodeLock lock;
+    s_statusDirty = true;
+  }
   netTransition(QLCP_NET_BACKOFF, nowMs);
 }
 
@@ -221,13 +238,12 @@ static void qlcpTelemetryService(uint32_t nowMs);
 
 // Command a control by its QLCP/cmdId index. Local controls actuate immediately;
 // remote controls queue a Cmd that nodeServiceCanTx sends to the LCM.
-static bool setControlByIndex(uint8_t index, bool open, bool& confirmedOut) {
+static bool setControlByIndex(uint8_t index, bool open) {
   if (index >= kCtrlCount) {
     return false;
   }
   NodeLock lock;
   controlSet(s_controls[index], open);
-  confirmedOut = s_controls[index].confirmed;
   return true;
 }
 
@@ -254,17 +270,58 @@ static void sendNack(uint8_t nackType, uint16_t nackSeq, uint8_t errCode) {
   }
 }
 
-// STATUS is the required response to CONTROL, STATUS_REQUEST, and ESTOP —
-// it doubles as the ack for whichever of those triggered it (ackType/ackSeq).
+// A remote control is PENDING from the moment a Cmd is queued until the LCM has
+// both Acked that sequence (awaitingAck clears) and broadcast a State frame
+// carrying the new position (state catches up to desiredOpen). Requiring both
+// closes the window where the Ack has landed but `state` still holds the old
+// position — reporting CONFIRMED there would attach a stale value.
+// Local controls actuate on the calling thread, so they are never pending.
+// Caller holds NodeLock.
+static bool ctrlIsPending(const aim::Control& c) {
+  return (c.kind == aim::ControlKind::Remote) &&
+         (c.awaitingAck || (c.state != c.desiredOpen));
+}
+
+// Everything STATUS reports, packed for cheap comparison: low kCtrlCount bits
+// are the reported state of each control, high bits its pending flag. When this
+// drifts from what the server last saw, an unsolicited STATUS is owed.
+// Caller holds NodeLock.
+static uint16_t statusFingerprint() {
+  uint16_t fp = 0U;
+  for (uint8_t i = 0U; i < kCtrlCount; i++) {
+    const aim::Control& c = s_controls[i];
+    const bool pending = ctrlIsPending(c);
+    if (pending ? c.desiredOpen : c.state) {
+      fp = static_cast<uint16_t>(fp | (1U << i));
+    }
+    if (pending) {
+      fp = static_cast<uint16_t>(fp | (1U << (i + kCtrlCount)));
+    }
+  }
+  return fp;
+}
+
+// STATUS is the required response to CONTROL, STATUS_REQUEST, and ESTOP — it
+// doubles as the ack for whichever of those triggered it (ackType/ackSeq).
+// ackType == QLCP_PT_NO_ACK marks a device-initiated update (spec 7.2); the
+// server skips command-response tracking on those and ackSeq is free.
 static void sendStatus(uint8_t ackType, uint16_t ackSeq) {
-  qlcp_control_data controlData[kCtrlCount] = {};
+  qlcp_status_data controlData[kCtrlCount] = {};
+  uint16_t fingerprint = 0U;
   {
     NodeLock lock;
     for (uint8_t i = 0U; i < kCtrlCount; i++) {
+      const aim::Control& c = s_controls[i];
+      const bool pending = ctrlIsPending(c);
       controlData[i].id = i;
       controlData[i].type = QLCP_CONTROL_BOOL;
-      controlData[i].state.control_bool = controlGet(s_controls[i]) ? QLCP_CS_OPEN : QLCP_CS_CLOSED;
+      controlData[i].status = pending ? QLCP_CONTROL_STATUS_PENDING
+                                      : QLCP_CONTROL_STATUS_CONFIRMED;
+      // Spec 7.2: PENDING carries the last commanded state, CONFIRMED the actual one.
+      controlData[i].state.control_bool =
+          (pending ? c.desiredOpen : c.state) ? QLCP_CS_OPEN : QLCP_CS_CLOSED;
     }
+    fingerprint = statusFingerprint();
   }
   qlcp_server_payload out = {};
   out.packet_type = QLCP_PT_STATUS;
@@ -275,7 +332,11 @@ static void sendStatus(uint8_t ackType, uint16_t ackSeq) {
   out.payload_data.status.control_count = kCtrlCount;
   if (tcp_tx_payload(&s_netLink, &out) != 0) {
     LOG_DEBUG("STATUS dropped — TX busy");
+    return;  // s_statusDirty stays latched; qlcpStatusService retries next tick
   }
+  NodeLock lock;
+  s_reportedFingerprint = fingerprint;
+  s_statusDirty = false;
 }
 
 // Device-initiated: sent once right after CONFIG is queued, then every
@@ -353,12 +414,13 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
         break;
       }
       const bool open = (in.payload_data.control.control_data.state.control_bool == QLCP_CS_OPEN);
-      bool confirmed = false;
-      const bool validId = setControlByIndex(cmdId, open, confirmed);
-      if (validId && confirmed) {
+      // A command to an LCM-owned control is answered immediately; the STATUS
+      // reports it PENDING until the LCM confirms, rather than failing the
+      // command because the position is not yet known.
+      if (setControlByIndex(cmdId, open)) {
         sendStatus(QLCP_PT_CONTROL, seq);
       } else {
-        sendNack(QLCP_PT_CONTROL, seq, validId ? QLCP_ERR_HARDWARE_FAULT : QLCP_ERR_INVALID_ID);
+        sendNack(QLCP_PT_CONTROL, seq, QLCP_ERR_INVALID_ID);
       }
       break;
     }
@@ -524,11 +586,30 @@ static void qlcpTelemetryService(uint32_t nowMs) {
   (void)udp_send_data(&s_netLink, &pkt);
 }
 
+// Device-initiated STATUS (spec 7.2): when an LCM Ack/State retires a PENDING
+// control the server is told without having asked. Runs here rather than at the
+// point of detection because tcp_tx_payload serializes into one static TX buffer
+// and is only ever driven from this task.
+static void qlcpStatusService() {
+  if ((s_netState != QLCP_NET_CONNECTED) || !s_configSent) {
+    return;
+  }
+  bool owed = false;
+  {
+    NodeLock lock;
+    owed = s_statusDirty;
+  }
+  if (owed) {
+    sendStatus(QLCP_PT_NO_ACK, 0U);
+  }
+}
+
 static void qlcpTask(void* pvParameters) {
   (void)pvParameters;
   for (;;) {
     uint32_t nowMs = millis();
     qlcpNetService(nowMs);
+    qlcpStatusService();
     qlcpTelemetryService(nowMs);
     vTaskDelay(pdMS_TO_TICKS(1));
   }
@@ -581,7 +662,7 @@ void nodeInit() {
 
   // Sensors. toEng converts the catalog-scaled wire integer to engineering units.
   sensorInitLocal (s_sensors[kSenPt202],    "Pt202 (Run Tank, local)", aim::subject::Pt202,        0.01f,  "PSI");
-  sensorInitLocal (s_sensors[kSenPtSpare1], "PtSpare1 (local)",        aim::subject::PtSpare1,     0.01f,  "PSI");
+  sensorInitLocal (s_sensors[kSenPt102],    "Pt102 (local)",           aim::subject::PtSpare1,     0.01f,  "PSI");
   sensorInitRemote(s_sensors[kSenPt204],    "Pt204 (Chamber, remote)", aim::subject::Pt204,        0.01f,  "PSI");
   sensorInitRemote(s_sensors[kSenPtSpare2], "PtSpare2 (remote)",       aim::subject::PtSpare2,     0.01f,  "PSI");
   sensorInitRemote(s_sensors[kSenTc],       "TC (remote)",             aim::subject::TcLowerValve, 0.01f,  "C");
@@ -627,8 +708,8 @@ void nodeUpdate(uint32_t nowMs) {
       float volts[kAdcChannelCount] = {0.0f};
       s_adc.computeVoltages(rawData, volts);
       NodeLock lock;
-      sensorSampleEng(s_sensors[kSenPt202], processPT(volts[kAdcChPt202]));
-      sensorSampleEng(s_sensors[kSenPtSpare1], processPT(volts[kAdcChPtSpare1]));
+      sensorSampleEng(s_sensors[kSenPt202], processPT(volts[kAdcChPt202], kPt202MaxPsi));
+      sensorSampleEng(s_sensors[kSenPt102], processPT(volts[kAdcChPt102], kPt102MaxPsi));
     }
   }
 
@@ -648,6 +729,15 @@ void nodeUpdate(uint32_t nowMs) {
       LOG_DEBUG("Lower Control link %s", s_lowerLinkUp ? "UP" : "STALE");
     }
   }
+
+  // An LCM Ack/State — or a console command — can change the control picture at
+  // any time, on this core. Latch the divergence; qlcpTask does the sending.
+  {
+    NodeLock lock;
+    if (statusFingerprint() != s_reportedFingerprint) {
+      s_statusDirty = true;
+    }
+  }
 }
 
 void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
@@ -660,7 +750,7 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
     {
       NodeLock lock;
       sensorBuildFrame(s_sensors[kSenPt202], pt1Msg);
-      sensorBuildFrame(s_sensors[kSenPtSpare1], pt2Msg);
+      sensorBuildFrame(s_sensors[kSenPt102], pt2Msg);
     }
     (void)aim.send(pt1Msg);
     (void)aim.send(pt2Msg);
@@ -813,8 +903,7 @@ static void hookSetValve(Stream& out) {
     return;
   }
   bool open = (state == '1');
-  bool dummyConfirmed = false;
-  if (setControlByIndex(ctrlIdx, open, dummyConfirmed)) {
+  if (setControlByIndex(ctrlIdx, open)) {
     out.printf("%s -> %s\n", s_controls[ctrlIdx].name, open ? "OPEN/ON" : "CLOSED/OFF");
   } else {
     out.println("Set control failed");
