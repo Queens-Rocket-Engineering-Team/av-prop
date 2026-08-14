@@ -10,17 +10,10 @@
 
 static constexpr uint32_t kWatchdogTimeoutMs = 2000U;
 static constexpr uint8_t kMaxRxFramesPerLoop = 8U;
-static constexpr uint32_t kLogIntervalMs = 100U;
 
 static ESP32PartitionDriver s_flashHw("storage");
 static AimFileSystem s_fs(&s_flashHw);
-
-// Storage partition: 384 blocks × 4096 B = 1,572,864 B (partitions.csv).
-static constexpr uint32_t kStoragePartitionBytes = 384U * 4096U;
-static constexpr uint32_t kLfsMetadataReserve    = 320U * 1024U;
-static constexpr uint32_t kMaxLogSize = (kStoragePartitionBytes - kLfsMetadataReserve) / 2U;
-
-static AimFlightRecorder s_flightRecorder(s_fs, BOARD_LOG_COL_COUNT, 100, kMaxLogSize);
+static AimFlightRecorder s_flightRecorder(s_fs, kLogCols, kLogOriginRefresh, kLogMaxSize, kLogHeaders);
 
 static AimCanHardware g_canHw(node::kCanBaud, pins::kCanRx, pins::kCanTx);
 AimNetwork g_aim(&g_canHw, node::kSource);
@@ -90,9 +83,24 @@ void setup(void) {
     LOG_ERROR("CAN init failed");
   }
 
-  // Storage init bypassed while aim_flash_storage library is under background dev
-  s_storageReady = false;
-  LOG_INFO("Flash storage logging disabled (under background development)");
+  // Storage initialization on ESP32 partition
+  if (!s_fs.begin()) {
+    LOG_WARN("Flash filesystem mount failed — formatting partition...");
+    if (!s_fs.format() || !s_fs.begin()) {
+      LOG_ERROR("Flash filesystem initialization failed");
+    } else {
+      LOG_INFO("Flash filesystem formatted and mounted successfully");
+    }
+  }
+
+  if (s_fs.isReady()) {
+    if (!s_flightRecorder.begin()) {
+      LOG_WARN("Flight recorder init failed");
+    } else {
+      s_storageReady = true;
+      LOG_INFO("Flight recorder ready on ESP32 storage partition");
+    }
+  }
 
 #ifndef FLIGHT_BUILD
   uint8_t nodeHookCount = 0U;
@@ -119,7 +127,10 @@ void loop(void) {
   serviceCanRx();
   const uint32_t nowMs = millis();
   nodeUpdate(nowMs);
-  nodeServiceCanTx(g_aim.syncedMillis(), g_aim);
+  if (!aimConsoleIsActive()) {
+    nodeServiceLog(nowMs, s_flightRecorder);
+  }
+  nodeServiceCanTx(nowMs, g_aim);
   g_aim.service(nowMs, nodeCurrentState(), nodeErrorBits());
 
 #ifndef FLIGHT_BUILD

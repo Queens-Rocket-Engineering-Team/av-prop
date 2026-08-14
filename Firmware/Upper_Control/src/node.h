@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include <aim_network.h>
-#include <aim_safety.h>
+class AimFlightRecorder;
 
 #include "pinouts.h"
 
@@ -16,21 +16,16 @@ constexpr uint32_t kCanBaud = 1000000U;
 constexpr uint32_t kSerialBaud = 115200U;
 }  // namespace node
 
-// Standard telemetry columns for flight recording
-enum BoardTelemetryCol {
-  BOARD_LOG_TIME_MS,
-  BOARD_LOG_PT1_PSI,
-  BOARD_LOG_PT2_PSI,
-  BOARD_LOG_RSSI,
-  BOARD_LOG_VPT_FET,
-  BOARD_LOG_V1_FET,
-  BOARD_LOG_COL_COUNT
-};
+static constexpr uint8_t  kLogCols           = 3U;
+static constexpr uint16_t kLogOriginRefresh  = 100U;
+static constexpr uint32_t kLogMaxSize        = 0;
+static const char* const  kLogHeaders[kLogCols] = {"time", "solenoid0", "solenoid1"};
 
 // Standard node interface
 extern AimNetwork g_aim;
 void nodeInit();
 void nodeUpdate(uint32_t nowMs);
+void nodeServiceLog(uint32_t nowMs, AimFlightRecorder& recorder);
 void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim);
 void nodeOnRx(const aim::Msg& m, uint32_t nowMs);
 aim::NodeState nodeCurrentState();

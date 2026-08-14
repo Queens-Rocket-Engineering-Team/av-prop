@@ -10,6 +10,7 @@
 #include <aim_control.h>
 #include <aim_sensor.h>
 #include <aim_job.h>
+#include <aim_flight_recorder.h>
 #include <prop_testing.h>
 #include <cstring>
 #include <WiFi.h>
@@ -20,8 +21,8 @@ extern "C" {
 #include <qlcp_lib.h>
 }
 
-#define WIFI_SSID "Nolito"
-#define WIFI_PASS "6138201079"
+#define WIFI_SSID "QRET-PAD"
+#define WIFI_PASS "Mach2@69"
 
 static SemaphoreHandle_t s_nodeMutex = nullptr;
 
@@ -61,11 +62,8 @@ static aim::Control s_controls[kCtrlCount];
 enum UcmSensor : uint8_t {
   kSenPt202,     // 0: local  — UCM ADC
   kSenPt102,     // 1: local  — UCM ADC; wire subject is still aim::subject::PtSpare1 (0x13)
-  kSenPt204,     // 2: remote — LCM
-  kSenPtSpare2,  // 3: remote — LCM
-  kSenTc,        // 4: remote — LCM thermocouple
-  kSenVolt24,    // 5: local  — UCM 24V sense
-  kSenVsol,      // 6: remote — LCM VSOL sense
+  kSenVolt24,    // 2: local  — UCM 24V sense
+  kSenVsol,      // 3: remote — LCM VSOL sense
   kSenCount
 };
 static aim::Sensor s_sensors[kSenCount];
@@ -91,9 +89,9 @@ constexpr uint8_t kAdcChPt102 = 1U;
 constexpr float kPt202MaxPsi = 1000.0f;
 constexpr float kPt102MaxPsi = 508.0f;
 
-static aim::Job s_adcJob = {100U, 0U};          // 10 Hz PT CAN broadcast
-static aim::Job s_telemetryJob = {500U, 0U};    // 2 Hz 24V sense & valve state CAN broadcast
-static aim::Job s_timeSyncCanJob = {1000U, 0U}; // 1 Hz CAN TimeSync master broadcast
+static aim::Job s_logJob(1000U, 10U);
+static aim::Job s_telemetryJob(500U, 20U);      // 2 Hz idle, 50 Hz active CAN broadcast
+static aim::Job s_timeSyncCanJob(1000U);        // 1 Hz CAN TimeSync master broadcast
 
 constexpr char kBoardQlcpConfigJson[] = R"json({
   "device_name": "PEGASUS-UPPER",
@@ -104,18 +102,6 @@ constexpr char kBoardQlcpConfigJson[] = R"json({
       },
       "PT102": {
         "unit": "PSI"
-      },
-      "PT204": {
-        "unit": "PSI"
-      },
-      "PTSPARE2": {
-        "unit": "PSI"
-      }
-    },
-    "thermocouple": {
-      "TcLowerValve": {
-        "type": "K",
-        "unit": "C"
       }
     },
     "voltage_sense": {
@@ -202,7 +188,7 @@ static bool         s_configSent = false;
 static uint16_t     s_sequence = 0U;
 static uint16_t     s_streamFrequencyHz = 0U;
 static uint32_t     s_lastStreamTxMs = 0U;
-static aim::Job     s_qlcpTimeSyncJob = {kTimesyncIntervalMs, 0U};
+static aim::Job     s_qlcpTimeSyncJob(kTimesyncIntervalMs);
 
 // Control picture as of the last STATUS the server actually received, and the
 // latch saying it has gone stale since. Guarded by NodeLock.
@@ -564,18 +550,17 @@ static void qlcpTelemetryService(uint32_t nowMs) {
   qlcp_sensor_data readings[kSenCount] = {};
   {
     NodeLock lock;
-    for (uint8_t i = 0U; i < 4U; i++) {  // PTs occupy sensor_id 0..3 = s_sensors[0..3]
-      readings[i].id = i;
-      readings[i].value = sensorEng(s_sensors[i]);
-    }
-    readings[4].id = kSenTc;
-    readings[4].value = sensorEng(s_sensors[kSenTc]);
+    readings[0].id = kSenPt202;
+    readings[0].value = sensorEng(s_sensors[kSenPt202]);
 
-    readings[5].id = kSenVolt24;
-    readings[5].value = sensorEng(s_sensors[kSenVolt24]);
+    readings[1].id = kSenPt102;
+    readings[1].value = sensorEng(s_sensors[kSenPt102]);
 
-    readings[6].id = kSenVsol;
-    readings[6].value = sensorEng(s_sensors[kSenVsol]);
+    readings[2].id = kSenVolt24;
+    readings[2].value = sensorEng(s_sensors[kSenVolt24]);
+
+    readings[3].id = kSenVsol;
+    readings[3].value = sensorEng(s_sensors[kSenVsol]);
   }
 
   qlcp_data_packet pkt = {};
@@ -663,9 +648,6 @@ void nodeInit() {
   // Sensors. toEng converts the catalog-scaled wire integer to engineering units.
   sensorInitLocal (s_sensors[kSenPt202],    "Pt202 (Run Tank, local)", aim::subject::Pt202,        0.01f,  "PSI");
   sensorInitLocal (s_sensors[kSenPt102],    "Pt102 (local)",           aim::subject::PtSpare1,     0.01f,  "PSI");
-  sensorInitRemote(s_sensors[kSenPt204],    "Pt204 (Chamber, remote)", aim::subject::Pt204,        0.01f,  "PSI");
-  sensorInitRemote(s_sensors[kSenPtSpare2], "PtSpare2 (remote)",       aim::subject::PtSpare2,     0.01f,  "PSI");
-  sensorInitRemote(s_sensors[kSenTc],       "TC (remote)",             aim::subject::TcLowerValve, 0.01f,  "C");
   sensorInitLocal (s_sensors[kSenVolt24],   "24V (Local)",             aim::subject::Volt24Ucm,    0.001f, "V");
   sensorInitRemote(s_sensors[kSenVsol],     "24V (Remote)",            aim::subject::VoltSolLcm,   0.001f, "V");
 
@@ -740,21 +722,22 @@ void nodeUpdate(uint32_t nowMs) {
   }
 }
 
+void nodeServiceLog(uint32_t nowMs, AimFlightRecorder& recorder) {
+  if (!s_logJob.due(nowMs)) return;
+
+  uint32_t rowData[3] = {0};
+  {
+    NodeLock lock;
+    rowData[0] = nowMs;
+    rowData[1] = static_cast<uint32_t>(controlGet(s_controls[kCtrlAv204]));
+    rowData[2] = static_cast<uint32_t>(controlGet(s_controls[kCtrlAvSpare]));
+  }
+
+  recorder.writeRow(rowData);
+}
+
 void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
   AIM_ASSERT(s_boardHardwareReady);
-
-  // Sensor frame broadcasts at 10 Hz
-  if (s_adcJob.due(nowMs)) {
-    aim::Msg pt1Msg = {};
-    aim::Msg pt2Msg = {};
-    {
-      NodeLock lock;
-      sensorBuildFrame(s_sensors[kSenPt202], pt1Msg);
-      sensorBuildFrame(s_sensors[kSenPt102], pt2Msg);
-    }
-    (void)aim.send(pt1Msg);
-    (void)aim.send(pt2Msg);
-  }
 
   // 2 Hz Telemetry Broadcast (24V sense & local valve states)
   if (s_telemetryJob.due(nowMs)) {
@@ -795,12 +778,20 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
     LOG_INFO("AimNetwork master time synced to server: %lu ms", static_cast<unsigned long>(syncTimeMs));
   }
 
-  // 1 Hz CAN TimeSync broadcast (UCM is the network time master)
+  // 1 Hz CAN TimeSync & dynamic rate sync broadcast (UCM is the network master)
   if (s_timeSyncCanJob.due(nowMs)) {
     aim::Msg tsMsg = {};
     tsMsg.cls     = aim::Class::Time;
     tsMsg.subject = aim::subject::TimeSync;
     (void)aim.send(tsMsg);
+
+    if (g_aim.isHighDataRate()) {
+      aim::Msg modeEvt = {};
+      modeEvt.cls     = aim::Class::Event;
+      modeEvt.subject = aim::subject::TelemetryMode;
+      modeEvt.b[0]    = 1U;
+      (void)aim.send(modeEvt);
+    }
   }
 
   // Forward QLCP STREAM_START/STOP as CAN TelemetryMode event
@@ -812,12 +803,15 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
   }
 
   if (modeToSend >= 0) {
+    bool active = (modeToSend == 1);
+    g_aim.setHighDataRate(active);
+    
     aim::Msg modeEvt = {};
     modeEvt.cls     = aim::Class::Event;
     modeEvt.subject = aim::subject::TelemetryMode;
     modeEvt.b[0]    = static_cast<uint8_t>(modeToSend);
     (void)aim.send(modeEvt);
-    LOG_INFO("TelemetryMode CAN broadcast: %s", modeToSend == 1 ? "Active" : "Idle");
+    LOG_INFO("TelemetryMode CAN broadcast: %s", active ? "Active" : "Idle");
   }
 }
 

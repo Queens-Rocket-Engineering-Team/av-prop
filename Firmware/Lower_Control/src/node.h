@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include <aim_network.h>
-#include <aim_safety.h>
+class AimFlightRecorder;
 
 #include "pinouts.h"
 
@@ -16,8 +16,10 @@ namespace node {
   constexpr uint32_t    kSerialBaud = 38400U;
 }
 
+
 void nodeInit();
 void nodeUpdate(uint32_t nowMs);
+void nodeServiceLog(uint32_t nowMs, AimFlightRecorder& recorder);
 void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim);
 void nodeOnRx(const aim::Msg& m, uint32_t nowMs);
 aim::NodeState nodeCurrentState();

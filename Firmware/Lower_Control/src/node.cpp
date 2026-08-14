@@ -5,6 +5,7 @@
 #include <aim_job.h>
 #include <aim_control.h>
 #include <aim_sensor.h>
+#include <aim_flight_recorder.h>
 #include <prop_testing.h>
 
 static ADS131M04 s_adc(pins::kAdcCs, pins::kAdcDrdy, &SPI);
@@ -15,20 +16,16 @@ static Adafruit_NeoPixel s_rgbLeds(1U, pins::kRgbData, NEO_GRB + NEO_KHZ800);
 enum LcmControl : uint8_t { kCtrlAv203, kCtrlAv205, kCtrlPwrSolLcm, kCtrlPwrPtLcm, kCtrlCount };
 static aim::Control s_controls[kCtrlCount];
 
-enum LcmSensor : uint8_t { kSenPt204, kSenPtSpare2, kSenTc, kSenVsol, kSenCount };
+enum LcmSensor : uint8_t { kSenVsol, kSenCount };
 static aim::Sensor s_sensors[kSenCount];
 
-// LCM rate constants: 200 Hz PT CAN TX in Active mode, 1 Hz baseline in Idle mode.
-constexpr uint32_t kAdcActivePeriodMs      = 5U;     // 200 Hz (PT204 chamber pressure for LoRa downlink)
-constexpr uint32_t kAdcIdlePeriodMs         = 1000U;  // 1 Hz
-constexpr uint32_t kVoltSenseActivePeriodMs = 200U;   // 5 Hz
-constexpr uint32_t kVoltSenseIdlePeriodMs   = 2000U;  // 0.5 Hz
-constexpr uint32_t kBroadcastActivePeriodMs = 500U;   // 2 Hz
-constexpr uint32_t kBroadcastIdlePeriodMs   = 1000U;  // 1 Hz
+void nodeServiceLog(uint32_t nowMs, AimFlightRecorder& recorder) {
+  (void)nowMs;
+  (void)recorder;
+}
 
-static aim::Job s_adcJob{kAdcIdlePeriodMs, 0U};
-static aim::Job s_voltSenseJob{kVoltSenseIdlePeriodMs, 0U};
-static aim::Job s_broadcastJob{kBroadcastIdlePeriodMs, 0U};
+static aim::Job s_voltSenseJob(2000U, 200U); // 0.5 Hz idle, 5 Hz active voltage sense
+static aim::Job s_broadcastJob(1000U, 500U); // 1 Hz idle, 2 Hz active CAN broadcast
 
 // VSOL sense: 12-bit ADC over 3.3 V ref through an 11:1 divider.
 constexpr float kVoltSenseScale = (3.3f / 4095.0f) * 11.0f;
@@ -37,11 +34,6 @@ constexpr float kVoltSenseScale = (3.3f / 4095.0f) * 11.0f;
 constexpr uint32_t kUpperStaleTimeoutMs = 2000U;
 static uint32_t s_upperLastRxMs = 0U;
 static bool     s_upperLinkUp   = false;
-
-// ADC channel for each LCM-local sensor (both PTs are LCM-owned per the catalog).
-constexpr uint8_t kAdcChPt204    = 0U;
-constexpr uint8_t kAdcChPtSpare2 = 1U;
-constexpr uint8_t kAdcChTc       = 2U;
 
 // Full-scale range of the transducer physically installed on PT204. PtSpare2 is
 // an unpopulated spare and keeps the prop_testing default.
@@ -65,10 +57,6 @@ void nodeInit() {
   controlInitLocal(s_controls[kCtrlPwrSolLcm], "PwrSolLcm",  aim::subject::PwrSolLcm, pins::kVsolEn, true);
   controlInitLocal(s_controls[kCtrlPwrPtLcm],  "PwrPtLcm",   aim::subject::PwrPtLcm,  pins::kVptEn,  true);
 
-  // Sensors (all LCM-local). toEng converts the catalog-scaled wire integer to eng units.
-  sensorInitLocal(s_sensors[kSenPt204],    "Pt204 (Chamber, local)", aim::subject::Pt204,        0.01f,  "PSI");
-  sensorInitLocal(s_sensors[kSenPtSpare2], "PtSpare2 (local)",       aim::subject::PtSpare2,     0.01f,  "PSI");
-  sensorInitLocal(s_sensors[kSenTc],       "TcLowerValve (local)",   aim::subject::TcLowerValve, 0.01f,  "C");
   sensorInitLocal(s_sensors[kSenVsol],     "VSOL",                   aim::subject::VoltSolLcm,   0.001f, "V");
 
   delay(100);
@@ -97,17 +85,7 @@ static void updateLed(aim::NodeState state) {
 void nodeUpdate(uint32_t nowMs) {
   updateLed(nodeCurrentState());
 
-  // Sample PTs + thermocouple every tick
-  {
-    int32_t raw[4];
-    float volts[4];
-    if (s_adc.readChannels(raw)) {
-      s_adc.computeVoltages(raw, volts);
-      sensorSampleEng(s_sensors[kSenPt204], processPT(volts[kAdcChPt204], kPt204MaxPsi));
-      sensorSampleEng(s_sensors[kSenPtSpare2], processPT(volts[kAdcChPtSpare2]));
-      sensorSampleEng(s_sensors[kSenTc], processTC(volts[kAdcChTc], pins::kCjcSense));
-    }
-  }
+
 
   // Voltage sense every tick
   {
@@ -131,18 +109,7 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
     controlServiceTx(s_controls[i], nowMs, aim);
   }
 
-  // Sensor frame broadcasts at 100 Hz
-  if (s_adcJob.due(nowMs)) {
-    aim::Msg msg = {};
-    sensorBuildFrame(s_sensors[kSenPt204], msg);
-    (void)aim.send(msg);
-    sensorBuildFrame(s_sensors[kSenPtSpare2], msg);
-    (void)aim.send(msg);
-    sensorBuildFrame(s_sensors[kSenTc], msg);
-    (void)aim.send(msg);
-  }
-
-  // Voltage frame at 2 Hz
+  // Voltage frame at 0.5-5 Hz
   if (s_voltSenseJob.due(nowMs)) {
     aim::Msg vMsg = {};
     sensorBuildFrame(s_sensors[kSenVsol], vMsg);
@@ -160,32 +127,12 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
 }
 
 void nodeOnRx(const aim::Msg& m, uint32_t nowMs) {
-  // Rate switching: latch job periods on TelemetryMode/LaunchDetect events
-  if (m.cls == aim::Class::Event) {
-    if (m.subject == aim::subject::LaunchDetect || m.subject == aim::subject::TelemetryMode) {
-      const bool isActive = (m.subject == aim::subject::LaunchDetect) || (m.b[0] == 1U);
-      const uint32_t newAdcPeriod = isActive ? kAdcActivePeriodMs : kAdcIdlePeriodMs;
-      if (s_adcJob.periodMs != newAdcPeriod) {
-        s_adcJob.periodMs       = newAdcPeriod;
-        s_voltSenseJob.periodMs = isActive ? kVoltSenseActivePeriodMs : kVoltSenseIdlePeriodMs;
-        s_broadcastJob.periodMs = isActive ? kBroadcastActivePeriodMs : kBroadcastIdlePeriodMs;
-        LOG_INFO("TelemetryMode event (subj=0x%02X active=%d): ADC rate -> %lu ms",
-                 static_cast<unsigned>(m.subject), static_cast<int>(isActive),
-                 static_cast<unsigned long>(newAdcPeriod));
-      }
-    } else if (m.subject == aim::subject::LowPower) {
-      if (m.b[0] == 1U) {
-        s_adcJob.periodMs       = kAdcIdlePeriodMs;
-        s_voltSenseJob.periodMs = kVoltSenseIdlePeriodMs;
-        s_broadcastJob.periodMs = kBroadcastIdlePeriodMs;
-        LOG_INFO("LowPower: LCM rates -> idle");
-      }
-    }
-    return;  // Events are not control messages; skip control routing below
-  }
-
   if (m.source == aim::Source::Ucm) {
     s_upperLastRxMs = nowMs;
+  }
+
+  if (m.cls == aim::Class::Event) {
+    return;  // Events are not control messages; skip control routing below
   }
 
   bool actuated = false;
