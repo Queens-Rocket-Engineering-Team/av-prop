@@ -816,6 +816,17 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
 }
 
 void nodeOnRx(const aim::Msg& m, uint32_t nowMs) {
+  if (m.cls == aim::Class::Event) {
+    if (m.subject == aim::subject::LowPower && m.b[0] == 1U) {
+      NodeLock lock;
+      LOG_WARN("Low power event from source=%u: returning all controls to safe default", static_cast<unsigned>(m.source));
+      for (uint8_t i = 0U; i < kCtrlCount; i++) {
+        controlSetDefault(s_controls[i]);
+      }
+    }
+    return;
+  }
+
   if (m.source != aim::Source::Lcm) {
     return;
   }
