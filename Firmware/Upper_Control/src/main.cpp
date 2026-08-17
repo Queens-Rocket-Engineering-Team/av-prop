@@ -8,7 +8,7 @@
 #include <aim_file_system.h>
 #include <aim_flight_recorder.h>
 
-static constexpr uint32_t kWatchdogTimeoutMs = 2000U;
+static constexpr uint32_t kWatchdogTimeoutMs = 5000U;
 static constexpr uint8_t kMaxRxFramesPerLoop = 8U;
 
 static ESP32PartitionDriver s_flashHw("storage");
@@ -71,7 +71,6 @@ void setup(void) {
   Serial.begin(node::kSerialBaud);
   g_logger = &s_log;
   LOG_INFO("Boot board origin=%u", static_cast<unsigned>(node::kSource));
-  initWatchdog();
 
   // Class accept mask: Ack, State, Sensor, Time, Heartbeat, Event
   if (!g_aim.begin(aim::classBit(aim::Class::Ack) |
@@ -101,6 +100,8 @@ void setup(void) {
       LOG_INFO("Flight recorder ready on ESP32 storage partition");
     }
   }
+
+  initWatchdog();
 
 #ifndef FLIGHT_BUILD
   uint8_t nodeHookCount = 0U;

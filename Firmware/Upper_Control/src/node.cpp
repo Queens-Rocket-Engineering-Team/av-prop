@@ -69,13 +69,17 @@ enum UcmSensor : uint8_t {
 static aim::Sensor s_sensors[kSenCount];
 static uint32_t s_lowerLastRxMs = 0U;
 static bool     s_lowerLinkUp   = false;
+constexpr uint32_t kNetEStopTimeoutMs   = 300000U; // 5-minute WiFi/QLCP loss E-Stop watchdog
+constexpr uint32_t kLowerEStopTimeoutMs = 300000U; // 5-minute Lower CAN loss E-Stop watchdog
+static bool     s_wifiEStopSafed        = false;
+static bool     s_lcmEStopSafed         = false;
 
 static ADS131M04 s_adc(-1, pins::kAdcDrdy, &SPI);
 constexpr uint8_t kAdcClockChannel = 0U;
 constexpr uint32_t kAdcClockHz = 8192000U;
 constexpr uint8_t kAdcClockDuty = 1U;
-constexpr uint32_t kTelemetryPeriodMs = 100U;
-constexpr uint32_t kLowerStaleTimeoutMs = 1000U;
+constexpr uint32_t kTelemetryPeriodMs  = 100U;
+constexpr uint32_t kLowerStaleTimeoutMs = 2000U; // 2.0s tolerates 1 missed frame from 1 Hz LCM broadcast
 
 constexpr size_t kAdcChannelCount = 4U;
 
@@ -222,6 +226,31 @@ static void netFail(uint32_t nowMs) {
 static void qlcpNetService(uint32_t nowMs);
 static void qlcpTelemetryService(uint32_t nowMs);
 
+// Helper to force all controls to safe default (valves first, then power FETs after 100 ms delay)
+static void triggerEStop(const char* reason) {
+  LOG_ERROR("E-Stop triggered (%s) — safing valves first, then power FETs", reason ? reason : "Unknown");
+  {
+    NodeLock lock;
+    // 1. Safe all solenoid valves (indices 0..3)
+    for (uint8_t i = kCtrlAv204; i <= kCtrlAv205; i++) {
+      controlSetDefault(s_controls[i]);
+    }
+    s_statusDirty = true;
+  }
+
+  // 2. Allow coils to collapse magnetic field before cutting rail power
+  delay(100);
+
+  {
+    NodeLock lock;
+    // 3. Safe all power FETs (indices 4..6)
+    for (uint8_t i = kCtrlPwrPtUcm; i < kCtrlCount; i++) {
+      controlSetDefault(s_controls[i]);
+    }
+    s_statusDirty = true;
+  }
+}
+
 // Command a control by its QLCP/cmdId index. Local controls actuate immediately;
 // remote controls queue a Cmd that nodeServiceCanTx sends to the LCM.
 static bool setControlByIndex(uint8_t index, bool open) {
@@ -341,13 +370,8 @@ static void sendTimesyncReq() {
 static void qlcpHandlePacket(const qlcp_client_payload& in) {
   switch (in.packet_type) {
     case QLCP_PT_ESTOP: {
-      LOG_WARN("QLCP ESTOP — forcing all controls to default state");
-      {
-        NodeLock lock;
-        for (uint8_t i = 0U; i < kCtrlCount; i++) {
-          controlSetDefault(s_controls[i]);
-        }
-      }
+      LOG_WARN("QLCP ESTOP received from ground server");
+      triggerEStop("QLCP ground command");
       sendStatus(QLCP_PT_ESTOP, in.payload_data.header_only.header.sequence);
       break;
     }
@@ -512,6 +536,7 @@ static void qlcpNetService(uint32_t nowMs) {
       }
       if (rx == 1) {
         s_lastRxMs = nowMs;
+        s_wifiEStopSafed = false;
         qlcpHandlePacket(in);
       }
       if ((nowMs - s_lastRxMs) >= kNetRxIdleTimeoutMs) {
@@ -617,9 +642,10 @@ static void updateLed(aim::NodeState state) {
   s_lastState = state;
   uint8_t r = 0, g = 0, b = 0;
   switch (state) {
-    case aim::NodeState::Nominal: g = 255; break;
-    case aim::NodeState::Fault:   r = 255; break;
-    default:                      b = 255; break;
+    case aim::NodeState::Nominal:   g = 255; break;           // Green (Healthy / Communicating)
+    case aim::NodeState::Fault:     r = 255; g = 180; break; // Yellow (LCM Link Stale >1s)
+    case aim::NodeState::SafeState: r = 255; break;           // Red (Timeout >5m / Hardware Safed)
+    default:                        b = 255; break;           // Blue (Boot/Init)
   }
   neopixelWrite(pins::kRgbData, r, g, b);
 }
@@ -661,8 +687,11 @@ void nodeInit() {
   s_boardHardwareReady = true;
 
   // Start WiFi/QLCP state machine
+  const uint32_t nowMs = millis();
+  s_lastRxMs = nowMs;
+  s_lowerLastRxMs = nowMs;
   net_link_init(&s_netLink);
-  netTransition(QLCP_NET_WIFI_START, millis());
+  netTransition(QLCP_NET_WIFI_START, nowMs);
 
   // Spawn QLCP background task on Core 0 to isolate from main control loop (on Core 1)
   (void)xTaskCreatePinnedToCore(
@@ -680,6 +709,16 @@ void nodeInit() {
 
 void nodeUpdate(uint32_t nowMs) {
   AIM_ASSERT(s_boardHardwareReady);
+
+  // 5-minute watchdog checks
+  if (!s_wifiEStopSafed && ((nowMs - s_lastRxMs) >= kNetEStopTimeoutMs)) {
+    s_wifiEStopSafed = true;
+    triggerEStop("WiFi/QLCP link loss (5m)");
+  }
+  if (!s_lcmEStopSafed && ((nowMs - s_lowerLastRxMs) >= kLowerEStopTimeoutMs)) {
+    s_lcmEStopSafed = true;
+    triggerEStop("Lower Control CAN link loss (5m)");
+  }
 
   updateLed(nodeCurrentState());
 
@@ -833,6 +872,7 @@ void nodeOnRx(const aim::Msg& m, uint32_t nowMs) {
 
   NodeLock lock;
   s_lowerLastRxMs = nowMs;
+  s_lcmEStopSafed = false;
 
   if (m.cls == aim::Class::Ack || m.cls == aim::Class::State) {
     // Route the LCM's Ack/State to whichever remote control owns the subject.
@@ -849,7 +889,11 @@ void nodeOnRx(const aim::Msg& m, uint32_t nowMs) {
 }
 
 aim::NodeState nodeCurrentState() {
-  return s_lowerLinkUp ? aim::NodeState::Nominal : aim::NodeState::Fault;
+  const uint32_t nowMs = millis();
+  if ((nowMs - s_lastRxMs) >= kNetEStopTimeoutMs || (nowMs - s_lowerLastRxMs) >= kLowerEStopTimeoutMs) {
+    return aim::NodeState::SafeState; // Red
+  }
+  return s_lowerLinkUp ? aim::NodeState::Nominal : aim::NodeState::Fault; // Green vs Yellow
 }
 
 uint16_t nodeErrorBits() {

@@ -32,8 +32,10 @@ constexpr float kVoltSenseScale = (3.3f / 4095.0f) * 11.0f;
 
 // Link watchdog timeout: 2.0s tolerates 1 missed heartbeat while safing in <2.0s on link loss
 constexpr uint32_t kUpperStaleTimeoutMs = 2000U;
+constexpr uint32_t kUpperEStopTimeoutMs = 300000U; // 5-minute CAN loss E-Stop watchdog
 static uint32_t s_upperLastRxMs = 0U;
 static bool     s_upperLinkUp   = false;
+static bool     s_canEStopLatched = false;
 
 // Full-scale range of the transducer physically installed on PT204. PtSpare2 is
 // an unpopulated spare and keeps the prop_testing default.
@@ -61,6 +63,8 @@ void nodeInit() {
 
   delay(100);
 
+  s_upperLastRxMs = millis();
+
   analogReadResolution(12);
 
   s_rgbLeds.begin();
@@ -74,18 +78,37 @@ static void updateLed(aim::NodeState state) {
   s_lastState = state;
   uint8_t r = 0, g = 0, b = 0;
   switch (state) {
-    case aim::NodeState::Nominal: g = 255; break;
-    case aim::NodeState::Fault:   r = 255; break;
-    default:                      b = 255; break;
+    case aim::NodeState::Nominal:   g = 255; break;           // Green (Healthy / Communicating)
+    case aim::NodeState::Fault:     r = 255; g = 180; break; // Yellow (CAN Link Stale >2s)
+    case aim::NodeState::SafeState: r = 255; break;           // Red (Timeout >5m / Hardware Safed)
+    default:                        b = 255; break;           // Blue (Boot/Init)
   }
   s_rgbLeds.setPixelColor(0, s_rgbLeds.Color(r, g, b));
   s_rgbLeds.show();
 }
 
+static void executeSafingSequence() {
+  // 1. Safe solenoid valves first (AV203, AV205)
+  controlSetDefault(s_controls[kCtrlAv203]);
+  controlSetDefault(s_controls[kCtrlAv205]);
+
+  // 2. Allow coils to collapse magnetic field (100 ms)
+  delay(100);
+
+  // 3. Power off FETs (PwrSolLcm, PwrPtLcm)
+  controlSetDefault(s_controls[kCtrlPwrSolLcm]);
+  controlSetDefault(s_controls[kCtrlPwrPtLcm]);
+}
+
 void nodeUpdate(uint32_t nowMs) {
   updateLed(nodeCurrentState());
 
-
+  // 5-minute CAN loss E-Stop check
+  if (!s_canEStopLatched && ((nowMs - s_upperLastRxMs) >= kUpperEStopTimeoutMs)) {
+    s_canEStopLatched = true;
+    LOG_ERROR("UCM CAN link timeout (5m) — E-Stop triggered, safing valves then power FETs");
+    executeSafingSequence();
+  }
 
   // Voltage sense every tick
   {
@@ -129,6 +152,7 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
 void nodeOnRx(const aim::Msg& m, uint32_t nowMs) {
   if (m.source == aim::Source::Ucm) {
     s_upperLastRxMs = nowMs;
+    s_canEStopLatched = false;
   }
 
   if (m.cls == aim::Class::Event) {
@@ -145,7 +169,11 @@ void nodeOnRx(const aim::Msg& m, uint32_t nowMs) {
 }
 
 aim::NodeState nodeCurrentState() {
-  return s_upperLinkUp ? aim::NodeState::Nominal : aim::NodeState::Fault;
+  const uint32_t nowMs = millis();
+  if ((nowMs - s_upperLastRxMs) >= kUpperEStopTimeoutMs) {
+    return aim::NodeState::SafeState; // Red
+  }
+  return s_upperLinkUp ? aim::NodeState::Nominal : aim::NodeState::Fault; // Green vs Yellow
 }
 
 uint16_t nodeErrorBits() {
