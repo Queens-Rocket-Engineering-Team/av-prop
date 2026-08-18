@@ -21,8 +21,8 @@ extern "C" {
 #include <qlcp_lib.h>
 }
 
-#define WIFI_SSID "QRET-PAD"
-#define WIFI_PASS "Mach2@69"
+#define WIFI_SSID "Oma&Opa's"
+#define WIFI_PASS "Omaopa7079"
 
 static SemaphoreHandle_t s_nodeMutex = nullptr;
 
@@ -46,7 +46,7 @@ static bool s_boardHardwareReady = false;
 // controls driven remotely over CAN.
 enum UcmControl : uint8_t {
   kCtrlAv204,     // 0: local vent
-  kCtrlAvSpare,   // 1: local, No N2 valve (do not energize)
+  kCtrlAvSpare,   // 1: local (SOL2)
   kCtrlAv203,     // 2: remote (LCM)
   kCtrlAv205,     // 3: remote (LCM)
   kCtrlPwrPtUcm,  // 4: PwrPtUcm  local  PT power FET
@@ -93,8 +93,8 @@ constexpr uint8_t kAdcChPt102 = 1U;
 constexpr float kPt202MaxPsi = 1000.0f;
 constexpr float kPt102MaxPsi = 508.0f;
 
-static aim::Job s_logJob(1000U, 10U);
-static aim::Job s_telemetryJob(500U, 20U);      // 2 Hz idle, 50 Hz active CAN broadcast
+static aim::Job s_logJob(50U);                  // 20 Hz flight log
+static aim::Job s_telemetryJob(20U);            // 50 Hz CAN broadcast of 24 V sense + local valve states
 static aim::Job s_timeSyncCanJob(1000U);        // 1 Hz CAN TimeSync master broadcast
 
 constexpr char kBoardQlcpConfigJson[] = R"json({
@@ -127,7 +127,7 @@ constexpr char kBoardQlcpConfigJson[] = R"json({
         "unit": "bool"
       },
       "AVSPARE": {
-        "default_state": "CLOSED",
+        "default_state": "OPEN",
         "type": "BOOL",
         "unit": "bool"
       },
@@ -162,7 +162,6 @@ constexpr char kBoardQlcpConfigJson[] = R"json({
   }
 })json";
 
-static int8_t   s_pendingTelemetryMode = -1;  // -1: idle queue, 0: pending Idle, 1: pending Active
 static uint32_t s_pendingServerTimeMs  = 0U;   // 0: no pending time sync
 
 enum QlcpNetState : uint8_t {
@@ -177,9 +176,10 @@ enum QlcpNetState : uint8_t {
 
 constexpr uint32_t kNetWifiWaitTimeoutMs  = 15000U;
 constexpr uint32_t kNetTcpConnectTimeoutMs = 5000U;
-constexpr uint32_t kNetRxIdleTimeoutMs    = 15000U;
-constexpr uint32_t kNetBackoffMinMs       = 1000U;
-constexpr uint32_t kNetBackoffMaxMs       = 8000U;
+constexpr uint32_t kNetRxIdleTimeoutMs    = 30000U;  // 6 server heartbeats (5 s cadence)
+constexpr uint32_t kNetBackoffMinMs       = 500U;
+constexpr uint32_t kNetBackoffMaxMs       = 2000U;   // discovery socket is closed during backoff — keep the blind window short
+constexpr uint16_t kMaxStreamHz           = 500U;    // 1000/freq rounds to a 1 ms flood above this
 
 constexpr uint32_t kTimesyncIntervalMs = 60000U;
 
@@ -381,7 +381,7 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
         NodeLock lock;
         s_pendingServerTimeMs = serverTimeMs;
       }
-      LOG_INFO("QLCP timesync received: %lu ms", static_cast<unsigned long>(serverTimeMs));
+      LOG_DEBUG("QLCP timesync received: %lu ms", static_cast<unsigned long>(serverTimeMs));
       sendAck(QLCP_PT_TIMESYNC_RESP, in.payload_data.timesync_resp.header.sequence);
       break;
     }
@@ -392,13 +392,9 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
     case QLCP_PT_STREAM_START: {
       const uint16_t freq = in.payload_data.stream_start.stream_frequency;
       if (freq > 0U) {
-        s_streamFrequencyHz = freq;
+        s_streamFrequencyHz = (freq > kMaxStreamHz) ? kMaxStreamHz : freq;
         s_lastStreamTxMs = millis();
-        LOG_INFO("QLCP Stream Start at %u Hz", freq);
-      }
-      {
-        NodeLock lock;
-        s_pendingTelemetryMode = 1;
+        LOG_INFO("QLCP Stream Start at %u Hz", static_cast<unsigned>(s_streamFrequencyHz));
       }
       sendAck(QLCP_PT_STREAM_START, in.payload_data.stream_start.header.sequence);
       break;
@@ -406,10 +402,6 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
     case QLCP_PT_STREAM_STOP: {
       s_streamFrequencyHz = 0U;
       LOG_INFO("QLCP Stream Stop");
-      {
-        NodeLock lock;
-        s_pendingTelemetryMode = 0;
-      }
       sendAck(QLCP_PT_STREAM_STOP, in.payload_data.header_only.header.sequence);
       break;
     }
@@ -417,7 +409,7 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
       const uint8_t cmdId = in.payload_data.control.control_data.id;
       const uint8_t cmdType = in.payload_data.control.control_data.type;
       const uint16_t seq = in.payload_data.control.header.sequence;
-      LOG_INFO("Received control cmdId=%u type=%u", cmdId, cmdType);
+      LOG_DEBUG("Received control cmdId=%u type=%u", cmdId, cmdType);
       if (cmdType != QLCP_CONTROL_BOOL) {
         // Every UCM control is a bool valve/relay — nothing else is valid here.
         sendNack(QLCP_PT_CONTROL, seq, QLCP_ERR_INVALID_PARAM);
@@ -454,7 +446,7 @@ static void qlcpNetService(uint32_t nowMs) {
       break;
     case QLCP_NET_WIFI_WAIT:
       if (WiFi.status() == WL_CONNECTED) {
-        LOG_INFO("WiFi Connected! IP: %s", WiFi.localIP().toString().c_str());
+        LOG_DEBUG("WiFi Connected! IP: %s", WiFi.localIP().toString().c_str());
         s_netLink.netif_handle = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
         if (discovery_listen_begin(&s_netLink) == ESP_OK) {
           netTransition(QLCP_NET_DISCOVER, nowMs);
@@ -514,7 +506,7 @@ static void qlcpNetService(uint32_t nowMs) {
         out.payload_data.config.config_data_len = static_cast<uint16_t>(sizeof(kBoardQlcpConfigJson) - 1U);
         if (tcp_tx_payload(&s_netLink, &out) == 0) {
           s_configSent = true;
-          LOG_INFO("Sent CONFIG packet to server");
+          LOG_DEBUG("Sent CONFIG packet to server");
           // Device-initiated timesync starts right after CONFIG; periodic
           // resync cadence (kTimesyncIntervalMs) counts from here.
           sendTimesyncReq();
@@ -664,12 +656,12 @@ void nodeInit() {
   // All local controls boot de-energized (safe); remote controls assume the LCM's
   // own boot defaults.
   controlInitLocal (s_controls[kCtrlAv204],     "AV204_VENT", aim::subject::Av204,     pins::kSol1En, true);
+  controlInitLocal (s_controls[kCtrlAvSpare],   "AVSPARE",    aim::subject::AvSpare,   pins::kSol2En, true);
   controlInitLocal (s_controls[kCtrlPwrPtUcm],  "PwrPtUcm",   aim::subject::PwrPtUcm,  pins::kVptEn,  true);
   controlInitRemote(s_controls[kCtrlAv203],     "AV203_FILL", aim::subject::Av203,     true);
   controlInitRemote(s_controls[kCtrlAv205],     "AV205_MAIN", aim::subject::Av205,     false);
   controlInitRemote(s_controls[kCtrlPwrSolLcm], "PwrSolLcm",  aim::subject::PwrSolLcm, true);
   controlInitRemote(s_controls[kCtrlPwrPtLcm],  "PwrPtLcm",   aim::subject::PwrPtLcm,  true);
-  s_controls[kCtrlAvSpare].name = "AVSpare";  // do-not-energize spare; named for console only
 
   // Sensors. toEng converts the catalog-scaled wire integer to engineering units.
   sensorInitLocal (s_sensors[kSenPt202],    "Pt202 (Run Tank, local)", aim::subject::Pt202,        0.01f,  "PSI");
@@ -690,6 +682,9 @@ void nodeInit() {
   const uint32_t nowMs = millis();
   s_lastRxMs = nowMs;
   s_lowerLastRxMs = nowMs;
+  // No NVS write on every begin() retry; modem power-save drops the association on some APs.
+  WiFi.persistent(false);
+  WiFi.setSleep(false);
   net_link_init(&s_netLink);
   netTransition(QLCP_NET_WIFI_START, nowMs);
 
@@ -764,21 +759,27 @@ void nodeUpdate(uint32_t nowMs) {
 void nodeServiceLog(uint32_t nowMs, AimFlightRecorder& recorder) {
   if (!s_logJob.due(nowMs)) return;
 
-  uint32_t rowData[3] = {0};
+  // Column order must match kLogHeaders: time, 4 sensors (catalog-scaled ints), 7 controls in enum order.
+  uint32_t rowData[kLogCols] = {0};
   {
     NodeLock lock;
     rowData[0] = nowMs;
-    rowData[1] = static_cast<uint32_t>(controlGet(s_controls[kCtrlAv204]));
-    rowData[2] = static_cast<uint32_t>(controlGet(s_controls[kCtrlAvSpare]));
+    rowData[1] = static_cast<uint32_t>(s_sensors[kSenPt202].value);
+    rowData[2] = static_cast<uint32_t>(s_sensors[kSenPt102].value);
+    rowData[3] = static_cast<uint32_t>(s_sensors[kSenVolt24].value);
+    rowData[4] = static_cast<uint32_t>(s_sensors[kSenVsol].value);
+    for (uint8_t i = 0U; i < kCtrlCount; i++) {
+      rowData[5U + i] = static_cast<uint32_t>(controlGet(s_controls[i]));
+    }
   }
 
-  recorder.writeRow(rowData);
+  recorder.writeRow(rowData, nowMs);
 }
 
 void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
   AIM_ASSERT(s_boardHardwareReady);
 
-  // 2 Hz Telemetry Broadcast (24V sense & local valve states)
+  // 50 Hz telemetry broadcast (24 V sense & local valve states)
   if (s_telemetryJob.due(nowMs)) {
     aim::Msg solMsg = {};
     {
@@ -814,55 +815,21 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
   }
   if (syncTimeMs > 0U) {
     aim.syncTime(syncTimeMs);
-    LOG_INFO("AimNetwork master time synced to server: %lu ms", static_cast<unsigned long>(syncTimeMs));
+    LOG_DEBUG("AimNetwork master time synced to server: %lu ms", static_cast<unsigned long>(syncTimeMs));
   }
 
-  // 1 Hz CAN TimeSync & dynamic rate sync broadcast (UCM is the network master)
+  // 1 Hz CAN TimeSync broadcast (UCM is the network master)
   if (s_timeSyncCanJob.due(nowMs)) {
     aim::Msg tsMsg = {};
     tsMsg.cls     = aim::Class::Time;
     tsMsg.subject = aim::subject::TimeSync;
     (void)aim.send(tsMsg);
-
-    if (g_aim.isHighDataRate()) {
-      aim::Msg modeEvt = {};
-      modeEvt.cls     = aim::Class::Event;
-      modeEvt.subject = aim::subject::TelemetryMode;
-      modeEvt.b[0]    = 1U;
-      (void)aim.send(modeEvt);
-    }
-  }
-
-  // Forward QLCP STREAM_START/STOP as CAN TelemetryMode event
-  int8_t modeToSend = -1;
-  {
-    NodeLock lock;
-    modeToSend = s_pendingTelemetryMode;
-    s_pendingTelemetryMode = -1;
-  }
-
-  if (modeToSend >= 0) {
-    bool active = (modeToSend == 1);
-    g_aim.setHighDataRate(active);
-    
-    aim::Msg modeEvt = {};
-    modeEvt.cls     = aim::Class::Event;
-    modeEvt.subject = aim::subject::TelemetryMode;
-    modeEvt.b[0]    = static_cast<uint8_t>(modeToSend);
-    (void)aim.send(modeEvt);
-    LOG_INFO("TelemetryMode CAN broadcast: %s", active ? "Active" : "Idle");
   }
 }
 
 void nodeOnRx(const aim::Msg& m, uint32_t nowMs) {
+  // Events (LowPower etc.) are telemetry only — no automatic control action.
   if (m.cls == aim::Class::Event) {
-    if (m.subject == aim::subject::LowPower && m.b[0] == 1U) {
-      NodeLock lock;
-      LOG_WARN("Low power event from source=%u: returning all controls to safe default", static_cast<unsigned>(m.source));
-      for (uint8_t i = 0U; i < kCtrlCount; i++) {
-        controlSetDefault(s_controls[i]);
-      }
-    }
     return;
   }
 
@@ -929,9 +896,9 @@ static void hookNetworkStatus(Stream& out) {
 }
 
 static void hookSetValve(Stream& out) {
-  int index = out.read();
+  int index = aimConsoleWaitRead(out);
   if (index == ' ') {
-    index = out.read();
+    index = aimConsoleWaitRead(out);
   }
   if (index < '0' || index > '6') {
     NodeLock lock;
@@ -943,17 +910,17 @@ static void hookSetValve(Stream& out) {
     return;
   }
   uint8_t ctrlIdx = index - '0';
-  int state = out.read();
+  int state = aimConsoleWaitRead(out);
   if (state == ' ') {
-    state = out.read();
+    state = aimConsoleWaitRead(out);
   }
   if (state < '0' || state > '1') {
     out.println("Usage: v <0-6> <0|1>");
     return;
   }
-  bool open = (state == '1');
-  if (setControlByIndex(ctrlIdx, open)) {
-    out.printf("%s -> %s\n", s_controls[ctrlIdx].name, open ? "OPEN/ON" : "CLOSED/OFF");
+  bool isOpen = (state == '1');
+  if (setControlByIndex(ctrlIdx, isOpen)) {
+    out.printf("%s -> %s\n", s_controls[ctrlIdx].name, isOpen ? "OPEN/ON" : "CLOSED/OFF");
   } else {
     out.println("Set control failed");
   }

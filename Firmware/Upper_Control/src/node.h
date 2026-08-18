@@ -16,10 +16,13 @@ constexpr uint32_t kCanBaud = 1000000U;
 constexpr uint32_t kSerialBaud = 115200U;
 }  // namespace node
 
-static constexpr uint8_t  kLogCols           = 3U;
+static constexpr uint8_t  kLogCols           = 12U;
 static constexpr uint16_t kLogOriginRefresh  = 100U;
 static constexpr uint32_t kLogMaxSize        = 0;
-static const char* const  kLogHeaders[kLogCols] = {"time", "solenoid0", "solenoid1"};
+// Sensors are catalog-scaled ints (PSI x100, mV); controls are 0/1 in UcmControl enum order.
+static const char* const  kLogHeaders[kLogCols] = {
+    "time", "pt202", "pt102", "volt24", "vsol",
+    "av204", "avSpare", "av203", "av205", "pwrPtUcm", "pwrSolLcm", "pwrPtLcm"};
 
 // Standard node interface
 extern AimNetwork g_aim;

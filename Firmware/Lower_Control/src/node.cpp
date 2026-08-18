@@ -24,8 +24,8 @@ void nodeServiceLog(uint32_t nowMs, AimFlightRecorder& recorder) {
   (void)recorder;
 }
 
-static aim::Job s_voltSenseJob(2000U, 200U); // 0.5 Hz idle, 5 Hz active voltage sense
-static aim::Job s_broadcastJob(1000U, 500U); // 1 Hz idle, 2 Hz active CAN broadcast
+static aim::Job s_voltSenseJob(200U); // 5 Hz voltage sense
+static aim::Job s_broadcastJob(500U); // 2 Hz CAN state broadcast
 
 // VSOL sense: 12-bit ADC over 3.3 V ref through an 11:1 divider.
 constexpr float kVoltSenseScale = (3.3f / 4095.0f) * 11.0f;

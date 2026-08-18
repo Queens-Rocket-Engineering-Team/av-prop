@@ -8,7 +8,7 @@
 #include <aim_file_system.h>
 #include <aim_flight_recorder.h>
 
-static constexpr uint32_t kWatchdogTimeoutMs = 5000U;
+static constexpr uint32_t kWatchdogTimeoutMs = 10000U; // 10 seconds timeout
 static constexpr uint8_t kMaxRxFramesPerLoop = 8U;
 
 static ESP32PartitionDriver s_flashHw("storage");
@@ -28,6 +28,9 @@ static void initWatchdog(void) {
   const esp_err_t addStatus = esp_task_wdt_add(NULL);
   const bool addOk = (addStatus == ESP_OK) || (addStatus == ESP_ERR_INVALID_STATE);
   s_watchdogReady = initOk && addOk;
+  if (s_watchdogReady) {
+    LOG_INFO("Watchdog ready (%us timeout)", static_cast<unsigned>(kWatchdogTimeoutMs / 1000U));
+  }
 }
 
 static void kickWatchdog(void) {
@@ -70,6 +73,7 @@ void setup(void) {
   Serial.setTxBufferSize(2048);      // before begin(); default is small
   Serial.begin(node::kSerialBaud);
   g_logger = &s_log;
+  s_log.setFilterMask(0x0F);  // LogLevel is a bitmask; INFO alone drops WARN/ERROR
   LOG_INFO("Boot board origin=%u", static_cast<unsigned>(node::kSource));
 
   // Class accept mask: Ack, State, Sensor, Time, Heartbeat, Event
@@ -101,8 +105,6 @@ void setup(void) {
     }
   }
 
-  initWatchdog();
-
 #ifndef FLIGHT_BUILD
   uint8_t nodeHookCount = 0U;
   const AimConsoleHook* nodeHooks = nodeConsoleHooks(nodeHookCount);
@@ -117,6 +119,7 @@ void setup(void) {
 #endif
 
   nodeInit();
+  initWatchdog();
 
 #ifndef FLIGHT_BUILD
   Serial.println("Console ready. d=enter debug");
