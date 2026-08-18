@@ -59,6 +59,7 @@ static void hookStatus(Stream& out) {
 void setup(void) {
   g_serial.begin(node::kSerialBaud);
   g_logger = &g_log;
+  g_log.setFilterMask(0x0F);  // bench: all levels (SoftwareSerial spin ~25 ms/line — set back to INFO for the pad build)
   LOG_INFO("Boot %s source=%u", node::kName, static_cast<unsigned>(node::kSource));
 
   SPI.begin();
