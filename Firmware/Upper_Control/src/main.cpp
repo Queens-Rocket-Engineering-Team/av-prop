@@ -73,7 +73,7 @@ void setup(void) {
   Serial.setTxBufferSize(2048);      // before begin(); default is small
   Serial.begin(node::kSerialBaud);
 #if ARDUINO_USB_CDC_ON_BOOT
-  Serial.setTxTimeoutMs(0);          // unplugged USB host must never stall the loop (default waits 100 ms per write)
+  Serial.setTxTimeoutMs(20);         // 0 drops/truncates lines under two-task contention; default 100 ms stalls per write when no host is attached
 #endif
   g_logger = &s_log;
   s_log.setFilterMask(0x0F);  // LogLevel is a bitmask; INFO alone drops WARN/ERROR
