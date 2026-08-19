@@ -121,7 +121,7 @@ void nodeUpdate(uint32_t nowMs) {
     const bool currentlyUp = (nowMs - s_upperLastRxMs) < kUpperStaleTimeoutMs;
     if (currentlyUp != s_upperLinkUp) {
       s_upperLinkUp = currentlyUp;
-      LOG_INFO("Upper Control link %s", s_upperLinkUp ? "UP" : "STALE");
+      LOG_DEBUG("Upper Control link %s", s_upperLinkUp ? "UP" : "STALE");
     }
   }
 }

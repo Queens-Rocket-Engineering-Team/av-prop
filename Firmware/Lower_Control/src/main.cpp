@@ -118,5 +118,4 @@ void loop(void) {
   aimConsoleService();
 #endif
   IWatchdog.reload();
-  delay(1U);
 }
