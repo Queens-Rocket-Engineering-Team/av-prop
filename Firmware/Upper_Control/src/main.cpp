@@ -76,7 +76,7 @@ void setup(void) {
   Serial.setTxTimeoutMs(20);         // 0 drops/truncates lines under two-task contention; default 100 ms stalls per write when no host is attached
 #endif
   g_logger = &s_log;
-  s_log.setFilterMask(0x0F);  // LogLevel is a bitmask; INFO alone drops WARN/ERROR
+  s_log.setFilterMask(static_cast<uint8_t>(LogLevel::INFO));  // INFO only (bitmask; drops DEBUG/WARN/ERROR)
   LOG_INFO("Boot board origin=%u", static_cast<unsigned>(node::kSource));
 
   // Class accept mask: Ack, State, Sensor, Time, Heartbeat, Event
