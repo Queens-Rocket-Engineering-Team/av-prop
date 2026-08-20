@@ -12,7 +12,6 @@
 #include <aim_job.h>
 #include <aim_flight_recorder.h>
 #include <prop_testing.h>
-#include <atomic>
 #include <cstring>
 #include <WiFi.h>
 #include <esp_timer.h>
@@ -22,8 +21,8 @@ extern "C" {
 #include <qlcp_lib.h>
 }
 
-#define WIFI_SSID "QRET-PAD"
-#define WIFI_PASS "Mach2@69"
+#define WIFI_SSID "Oma&Opa's"
+#define WIFI_PASS "Omaopa7079"
 
 static SemaphoreHandle_t s_nodeMutex = nullptr;
 
@@ -72,16 +71,7 @@ static uint32_t s_lowerLastRxMs = 0U;
 static bool     s_lowerLinkUp   = false;
 constexpr uint32_t kNetEStopTimeoutMs   = 300000U; // 5-minute WiFi/QLCP loss E-Stop watchdog
 constexpr uint32_t kLowerEStopTimeoutMs = 300000U; // 5-minute Lower CAN loss E-Stop watchdog
-
-// Link age, wrap-safe. RX stamps are written with a *different* millis() call than the
-// check (serviceCanRx before nowMs; qlcpTask on Core 0), so lastRx can sit 1 ms ahead of
-// nowMs. Unsigned subtraction turns that into ~49 days and fires the 5-min E-stop instantly
-// (seen on the pad); a signed cast makes it read as "just now" instead.
-static inline int32_t linkAgeMs(uint32_t nowMs, uint32_t lastRxMs) {
-  return static_cast<int32_t>(nowMs - lastRxMs);
-}
-// Cleared on Core 0 (qlcpTask RX) and set on Core 1 (nodeUpdate) — atomic, no lock needed.
-static std::atomic<bool> s_wifiEStopSafed{false};
+static bool     s_wifiEStopSafed        = false;
 static bool     s_lcmEStopSafed         = false;
 
 static ADS131M04 s_adc(-1, pins::kAdcDrdy, &SPI);
@@ -196,7 +186,7 @@ constexpr uint32_t kTimesyncIntervalMs = 60000U;
 static net_link_t   s_netLink = {};
 static QlcpNetState s_netState = QLCP_NET_IDLE;
 static uint32_t     s_stateEnteredMs = 0U;
-static std::atomic<uint32_t> s_lastRxMs{0U};   // written Core 0 (qlcpTask), read Core 1 (E-stop timer)
+static uint32_t     s_lastRxMs = 0U;
 static uint32_t     s_backoffMs = kNetBackoffMinMs;
 static bool         s_configSent = false;
 static uint16_t     s_sequence = 0U;
@@ -404,14 +394,14 @@ static void qlcpHandlePacket(const qlcp_client_payload& in) {
       if (freq > 0U) {
         s_streamFrequencyHz = (freq > kMaxStreamHz) ? kMaxStreamHz : freq;
         s_lastStreamTxMs = millis();
-        LOG_DEBUG("QLCP Stream Start at %u Hz", static_cast<unsigned>(s_streamFrequencyHz));
+        LOG_INFO("QLCP Stream Start at %u Hz", static_cast<unsigned>(s_streamFrequencyHz));
       }
       sendAck(QLCP_PT_STREAM_START, in.payload_data.stream_start.header.sequence);
       break;
     }
     case QLCP_PT_STREAM_STOP: {
       s_streamFrequencyHz = 0U;
-      LOG_DEBUG("QLCP Stream Stop");
+      LOG_INFO("QLCP Stream Stop");
       sendAck(QLCP_PT_STREAM_STOP, in.payload_data.header_only.header.sequence);
       break;
     }
@@ -719,18 +709,13 @@ void nodeInit() {
 void nodeUpdate(uint32_t nowMs) {
   AIM_ASSERT(s_boardHardwareReady);
 
-  // 5-minute link-loss E-stops (wrap-safe; see linkAgeMs)
-  const int32_t wifiAgeMs = linkAgeMs(nowMs, s_lastRxMs);
-  const int32_t lcmAgeMs  = linkAgeMs(nowMs, s_lowerLastRxMs);
-
-  if (!s_wifiEStopSafed && wifiAgeMs >= static_cast<int32_t>(kNetEStopTimeoutMs)) {
+  // 5-minute watchdog checks
+  if (!s_wifiEStopSafed && ((nowMs - s_lastRxMs) >= kNetEStopTimeoutMs)) {
     s_wifiEStopSafed = true;
-    LOG_INFO("E-Stop: WiFi/QLCP link loss, age=%ld ms", static_cast<long>(wifiAgeMs));
     triggerEStop("WiFi/QLCP link loss (5m)");
   }
-  if (!s_lcmEStopSafed && lcmAgeMs >= static_cast<int32_t>(kLowerEStopTimeoutMs)) {
+  if (!s_lcmEStopSafed && ((nowMs - s_lowerLastRxMs) >= kLowerEStopTimeoutMs)) {
     s_lcmEStopSafed = true;
-    LOG_INFO("E-Stop: Lower Control CAN link loss, age=%ld ms", static_cast<long>(lcmAgeMs));
     triggerEStop("Lower Control CAN link loss (5m)");
   }
 
@@ -758,7 +743,7 @@ void nodeUpdate(uint32_t nowMs) {
   // LCM link staleness check
   {
     NodeLock lock;
-    const bool currentlyUp = linkAgeMs(nowMs, s_lowerLastRxMs) < static_cast<int32_t>(kLowerStaleTimeoutMs);
+    const bool currentlyUp = (nowMs - s_lowerLastRxMs) < kLowerStaleTimeoutMs;
     if (currentlyUp != s_lowerLinkUp) {
       s_lowerLinkUp = currentlyUp;
       LOG_DEBUG("Lower Control link %s", s_lowerLinkUp ? "UP" : "STALE");
@@ -785,6 +770,8 @@ void nodeServiceLog(uint32_t nowMs, AimFlightRecorder& recorder) {
     rowData[0] = nowMs;
     rowData[1] = static_cast<uint32_t>(s_sensors[kSenPt202].value);
     rowData[2] = static_cast<uint32_t>(s_sensors[kSenPt102].value);
+    rowData[3] = static_cast<uint32_t>(s_sensors[kSenVolt24].value);
+    rowData[4] = static_cast<uint32_t>(s_sensors[kSenVsol].value);
     for (uint8_t i = 0U; i < kCtrlCount; i++) {
       rowData[5U + i] = static_cast<uint32_t>(controlGet(s_controls[i]));
     }
@@ -875,8 +862,7 @@ void nodeOnRx(const aim::Msg& m, uint32_t nowMs) {
 
 aim::NodeState nodeCurrentState() {
   const uint32_t nowMs = millis();
-  if (linkAgeMs(nowMs, s_lastRxMs) >= static_cast<int32_t>(kNetEStopTimeoutMs) ||
-      linkAgeMs(nowMs, s_lowerLastRxMs) >= static_cast<int32_t>(kLowerEStopTimeoutMs)) {
+  if ((nowMs - s_lastRxMs) >= kNetEStopTimeoutMs || (nowMs - s_lowerLastRxMs) >= kLowerEStopTimeoutMs) {
     return aim::NodeState::SafeState; // Red
   }
   return s_lowerLinkUp ? aim::NodeState::Nominal : aim::NodeState::Fault; // Green vs Yellow

@@ -72,6 +72,7 @@ static void hookStatus(Stream& out) {
 void setup(void) {
   Serial.begin(node::kSerialBaud);
   g_logger = &s_log;
+  s_log.setFilterMask(static_cast<uint8_t>(LogLevel::INFO));  // INFO only (bitmask; drops DEBUG/WARN/ERROR)
   LOG_INFO("Boot board origin=%u", static_cast<unsigned>(node::kSource));
 
   // Class accept mask: Ack, State, Sensor, Time, Heartbeat, Event
@@ -125,8 +126,8 @@ void setup(void) {
 
 void loop(void) {
   // Main scheduler order: RX, updates, CAN, heartbeats, console, watchdog.
-  serviceCanRx();                    // must precede millis(): nodeOnRx stamps s_lowerLastRxMs with its own millis()
-  const uint32_t nowMs = millis();   // else nowMs - lastRx underflows → false 5-min E-stop
+  serviceCanRx();
+  const uint32_t nowMs = millis();
   nodeUpdate(nowMs);
   if (!aimConsoleIsActive()) {
     nodeServiceLog(nowMs, s_flightRecorder);
@@ -139,4 +140,5 @@ void loop(void) {
 #endif
 
   kickWatchdog();
+  delay(1U);
 }
