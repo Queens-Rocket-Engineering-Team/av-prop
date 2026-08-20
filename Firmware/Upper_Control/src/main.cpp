@@ -70,11 +70,7 @@ static void hookStatus(Stream& out) {
 #endif  // FLIGHT_BUILD
 
 void setup(void) {
-  Serial.setTxBufferSize(2048);      // before begin(); default is small
   Serial.begin(node::kSerialBaud);
-#if ARDUINO_USB_CDC_ON_BOOT
-  Serial.setTxTimeoutMs(20);         // 0 drops/truncates lines under two-task contention; default 100 ms stalls per write when no host is attached
-#endif
   g_logger = &s_log;
   LOG_INFO("Boot board origin=%u", static_cast<unsigned>(node::kSource));
 
@@ -82,7 +78,6 @@ void setup(void) {
   if (!g_aim.begin(aim::classBit(aim::Class::Ack) |
                    aim::classBit(aim::Class::State) |
                    aim::classBit(aim::Class::Sensor) |
-                   aim::classBit(aim::Class::Time) |
                    aim::classBit(aim::Class::Heartbeat) |
                    aim::classBit(aim::Class::Event))) {
     LOG_ERROR("CAN init failed");
