@@ -138,7 +138,8 @@ void setup()
     SPI.begin(ADC_SCLK_PIN, ADC_MISO_PIN, ADC_MOSI_PIN, -1);
     Wire.begin(HALL_SDA_PIN, HALL_SCL_PIN);
 
-    adcSetup(adc);
+    adc.init();
+    delay(100);
 
     if (!hallSensor.init(0x35, Wire))
     {
