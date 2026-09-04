@@ -796,25 +796,25 @@ void nodeServiceLog(uint32_t nowMs, AimFlightRecorder& recorder) {
 void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
   AIM_ASSERT(s_boardHardwareReady);
 
-  // // 50 Hz telemetry broadcast (24 V sense & local valve states)
-  // if (s_telemetryJob.due(nowMs)) {
-  //   aim::Msg solMsg = {};
-  //   {
-  //     NodeLock lock;
-  //     sensorBuildFrame(s_sensors[kSenVolt24], solMsg);
-  //   }
-  //   (void)aim.send(solMsg);
-  //
-  //   for (uint8_t i = kCtrlAv204; i <= kCtrlAvSpare; i++) {
-  //     aim::Msg sm = {};
-  //     {
-  //       NodeLock lock;
-  //       controlBuildState(s_controls[i], sm);
-  //     }
-  //     (void)aim.send(sm);
-  //   }
-  // }
-  //
+  // 50 Hz telemetry broadcast (24 V sense & local valve states)
+  if (s_telemetryJob.due(nowMs)) {
+    aim::Msg solMsg = {};
+    {
+      NodeLock lock;
+      sensorBuildFrame(s_sensors[kSenVolt24], solMsg);
+    }
+    (void)aim.send(solMsg);
+
+    for (uint8_t i = kCtrlAv204; i <= kCtrlAvSpare; i++) {
+      aim::Msg sm = {};
+      {
+        NodeLock lock;
+        controlBuildState(s_controls[i], sm);
+      }
+      (void)aim.send(sm);
+    }
+  }
+
   // Service control CAN traffic: remote Cmd (re)sends.
   {
     NodeLock lock;
@@ -822,19 +822,18 @@ void nodeServiceCanTx(uint32_t nowMs, AimNetwork& aim) {
       controlServiceTx(s_controls[i], nowMs, aim);
     }
   }
-  //
-  // // Apply pending server time sync from QLCP (under NodeLock)
-  // uint32_t syncTimeMs = 0U;
-  // {
-  //   NodeLock lock;
-  //   syncTimeMs = s_pendingServerTimeMs;
-  //   s_pendingServerTimeMs = 0U;
-  // }
-  // if (syncTimeMs > 0U) {
-  //   aim.syncTime(syncTimeMs);
-  //   LOG_DEBUG("AimNetwork master time synced to server: %lu ms", static_cast<unsigned long>(syncTimeMs));
-  // }
-  aim.syncTime(nowMs);
+
+  // Apply pending server time sync from QLCP (under NodeLock)
+  uint32_t syncTimeMs = 0U;
+  {
+    NodeLock lock;
+    syncTimeMs = s_pendingServerTimeMs;
+    s_pendingServerTimeMs = 0U;
+  }
+  if (syncTimeMs > 0U) {
+    aim.syncTime(syncTimeMs);
+    LOG_DEBUG("AimNetwork master time synced to server: %lu ms", static_cast<unsigned long>(syncTimeMs));
+  }
 
   // 1 Hz CAN TimeSync broadcast (UCM is the network master)
   if (s_timeSyncCanJob.due(nowMs)) {
