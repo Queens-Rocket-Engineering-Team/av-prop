@@ -12,6 +12,13 @@
 
 #include "TMAG5273.h"
 
+TMAG5273::TMAG5273(uint8_t addr, TwoWire* wire) : _addr(addr), _i2c(wire) {}
+
+bool TMAG5273::init() {
+    if (!_i2c) return false;
+    return init(_addr, *_i2c);
+}
+
 /// @brief initialize the sensor
 /// @param addr I2C address of sensor (0x35 by default)
 /// @param port reference to I2C port
@@ -97,10 +104,18 @@ float TMAG5273::getFluxY() {
 }
 
 float TMAG5273::getFluxZ() {
-    float data[3]; 
+    float data[3];
     if (!getAllFlux(data)) return NAN; // unsuccessful getAllFlux()
 
-    return data[2]; 
+    return data[2];
+}
+
+// Net field strength (mT), independent of the magnet's orientation to the sensor.
+float TMAG5273::getFluxMagnitude() {
+    float data[3];
+    if (!getAllFlux(data)) return NAN; // unsuccessful getAllFlux()
+
+    return sqrtf(data[0] * data[0] + data[1] * data[1] + data[2] * data[2]);
 }
 
 /// @brief obtain temperature values from sensor

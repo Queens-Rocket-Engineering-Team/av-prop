@@ -17,14 +17,19 @@
 
 class TMAG5273 {
     public:
-        bool init(uint8_t addr = 0x35, TwoWire &port = Wire); 
+        TMAG5273() : _addr(0x35), _i2c(&Wire) {}
+        TMAG5273(uint8_t addr, TwoWire* wire);
+
+        bool init();
+        bool init(uint8_t addr, TwoWire &port); 
 
         // data
-        float getFluxX(); 
-        float getFluxY(); 
-        float getFluxZ(); 
+        float getFluxX();
+        float getFluxY();
+        float getFluxZ();
+        float getFluxMagnitude(); // sqrt(x²+y²+z²) in mT; NAN on read failure
         float getTemp();
-        bool getAllFlux(float* axes); 
+        bool getAllFlux(float* axes);
 
         // settings
         bool setAveraging(uint8_t mode); 
